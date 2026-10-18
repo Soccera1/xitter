@@ -374,9 +374,10 @@ async function conversationData(viewerId: string, conversationId: string) {
 	const keys = await sql`select event from chat_events where conversation_id = ${conversationId} and kind = ${KIND.keyChange} order by seq desc limit 5`;
 	// each member's newest read marker: one index lookup per member, where
 	// sorting every marker the conversation ever had grew with its history
-	const reads = await sql`select m.user_id::text as id, r.event from chat_members m
-		cross join lateral (select e.event from chat_events e where e.conversation_id = m.conversation_id and e.kind = ${KIND.read} and e.sender_id = m.user_id
-			order by e.seq desc limit 1) r
+	const reads = await sql`select m.user_id::text as id, e.event from chat_members m
+		join chat_events e on e.seq = (select latest.seq from chat_events latest
+			where latest.conversation_id = m.conversation_id and latest.kind = ${KIND.read} and latest.sender_id = m.user_id
+			order by latest.seq desc limit 1)
 		where m.conversation_id = ${conversationId} order by m.user_id`;
 	const [last] = await sql`select seq::text from chat_events where conversation_id = ${conversationId} order by seq desc limit 1`;
 	const b64 = (r: { event: Buffer }) => Buffer.from(r.event).toString("base64");

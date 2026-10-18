@@ -7,7 +7,7 @@
 // instance settings). Every change is written to the audit log.
 
 import type { Viewer } from "./auth";
-import { sql } from "./db";
+import { sql, databaseBackend } from "./db";
 import { isFlag } from "./flags";
 import { isId, newId } from "./ids";
 import { createInvite, staffHandleProblem } from "./invites";
@@ -195,7 +195,7 @@ const ACTIONS: Record<string, Action> = {
 				(select count(*)::int from likes l where l.created_at >= d and l.created_at < d + interval '1 day') as likes,
 				(select count(*)::int from follows f where f.created_at >= d and f.created_at < d + interval '1 day') as follows,
 				(select count(*)::int from reports r where r.created_at >= d and r.created_at < d + interval '1 day') as reports
-				from generate_series(date_trunc('day', now()) - interval '13 days', date_trunc('day', now()), interval '1 day') d order by d`;
+				from ${databaseBackend === "sqlite" ? sql`(with recursive days(d) as (select date_trunc('day', now()) - 13 * 86400000 union all select d + 86400000 from days where d < date_trunc('day', now())) select d from days) days` : sql`generate_series(date_trunc('day', now()) - interval '13 days', date_trunc('day', now()), interval '1 day') d`} order by d`;
 			// this week's movers: new followers, liked posts
 			const risers = await sql`select u.id::text as id, u.screen_name, u.name, u.avatar_url, u.verified_type, count(*)::int as gained
 				from follows f join users u on u.id = f.followee_id where f.created_at > now() - interval '7 days'

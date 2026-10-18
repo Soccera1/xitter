@@ -1,0 +1,22 @@
+# Standalone SQLite deployment: docker compose -f compose.sqlite.yaml up -d --build
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: sqlite:///app/data/xitter.sqlite
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:3000}
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    volumes:
+      - client:/app/client
+      - media:/app/media
+      - data:/app/data
+
+volumes:
+  client:
+  media:
+  data:

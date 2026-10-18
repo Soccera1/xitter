@@ -6,6 +6,7 @@
 	"scripts": {
 		"dev": "bun --watch src/server.ts",
 		"start": "bun src/server.ts",
+		"test:sqlite": "bun test scripts/sqlite.test.ts",
 		"har:extract": "bun scripts/har-extract.ts",
 		"client:fetch": "bun scripts/fetch-client.ts"
 	},

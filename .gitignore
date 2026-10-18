@@ -17,7 +17,7 @@ realm.env
 deploy/juicebox/verify/
 .DS_Store
 # local and test databases, dumps and Postgres data directories; the schema is
-# src/schema.sql and nothing else of a database belongs in the repository
+# src/schema.sql and src/schema.sqlite.sql; database files do not belong in the repository
 *.db
 *.db-journal
 *.db-wal
@@ -31,6 +31,13 @@ deploy/juicebox/verify/
 *.sql
 *.sql.gz
 !src/schema.sql
+!src/schema.sqlite.sql
+*.sqlite-journal
+*.sqlite3-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
 pgdata/
 postgres-data/
 *.pgdata/

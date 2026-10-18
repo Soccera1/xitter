@@ -95,10 +95,10 @@ export async function topicsForPosts(viewerId: string, posts: { id: string; auth
 	);
 	const ids = strangers.filter((p) => !followed.has(p.authorId)).map((p) => p.id);
 	if (!ids.length) return out;
-	const rows = await sql`select distinct on (p.id) p.id::text as post_id, ${topicCols(viewerId)}
+	const rows = await sql`select * from (select p.id::text as post_id, ${topicCols(viewerId)}, row_number() over (partition by p.id order by t.name) as choice
 		from posts p join topics t on p.text ~* ${pattern}
 		join topic_follows tf on tf.topic_id = t.id and tf.user_id = ${viewerId}::bigint
-		where p.id = any(${sql.array(ids, "INT8")}) order by p.id, t.name`;
+		where p.id = any(${sql.array(ids, "INT8")})) ranked where choice = 1 order by post_id, name`;
 	for (const r of rows as any[]) out.set(r.post_id, r);
 	return out;
 }

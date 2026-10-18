@@ -14,7 +14,7 @@
 //   lang:xx, near:, other operators  accepted and ignored
 
 import { blockedFor, outOfView } from "./blocks";
-import { sql } from "./db";
+import { sql, databaseBackend } from "./db";
 import { settings } from "./settings";
 
 type Clause = ReturnType<typeof sql>;
@@ -140,7 +140,7 @@ export async function hashtagsLike(prefix: string, limit: number): Promise<strin
 	const clean = prefix.replace(/^#/, "").replace(/[^\w]/g, "");
 	if (!clean) return [];
 	const rows = await sql`select tag, count(*) as n from (
-			select lower((regexp_matches(p.text, ${HASHTAG_RE}, 'g'))[1]) as tag from posts p where p.text ilike ${like(`#${clean}`)} and not p.hidden and p.user_id not in ${outOfView("0")}
+			select ${databaseBackend === "sqlite" ? sql`lower(matches.value)` : sql`lower((regexp_matches(p.text, ${HASHTAG_RE}, 'g'))[1])`} as tag from posts p ${databaseBackend === "sqlite" ? sql`, json_each(regexp_matches_json(p.text, ${HASHTAG_RE})) matches` : sql``} where p.text ilike ${like(`#${clean}`)} and not p.hidden and p.user_id not in ${outOfView("0")}
 			order by p.id desc limit 2000) t
 		where tag like ${`${clean.toLowerCase()}%`} group by tag order by n desc, tag limit ${limit}`;
 	return rows.map((r: any) => `#${r.tag}`);
@@ -175,10 +175,10 @@ export async function cachedTrends(days: number, limit: number, scope: TrendScop
 async function queryTrends(days: number, limit: number, scope: TrendScope) {
 	return await sql`select tag, sum(posts)::int as n, sum(w)::int as score from (
 			select tag, who, count(distinct id) as posts, max(w) as w from (
-				select p.id, lower((regexp_matches(p.text, ${HASHTAG_RE}, 'g'))[1]) as tag,
+				select p.id, ${databaseBackend === "sqlite" ? sql`lower(matches.value)` : sql`lower((regexp_matches(p.text, ${HASHTAG_RE}, 'g'))[1])`} as tag,
 					coalesce((select e.ip from login_events e where e.user_id = p.user_id and e.ip is not null order by e.created_at desc limit 1), p.user_id::text) as who,
 					${scope.followedBy ? sql`case when p.user_id in (select followee_id from follows where follower_id = ${scope.followedBy}::bigint) then 2 else 1 end` : sql`1`} as w
-				from posts p join users u on u.id = p.user_id
+				from posts p join users u on u.id = p.user_id ${databaseBackend === "sqlite" ? sql`, json_each(regexp_matches_json(p.text, ${HASHTAG_RE})) matches` : sql``}
 				where p.created_at > now() - make_interval(days => ${days}) and not p.hidden and p.user_id not in ${outOfView("0")}
 					and u.status = 'active' and u.created_at <= now() - make_interval(days => ${settings().operations.trend_min_account_days})
 					${scope.country ? sql`and u.country = ${scope.country}` : sql``}) t

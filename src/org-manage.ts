@@ -81,8 +81,10 @@ export async function orgRoute(req: Request, viewer: Viewer): Promise<Response> 
 	if (action === "accept" || action === "decline") {
 		const orgId = field("org");
 		if (!isId(orgId)) return view(req, viewer, "No such request.");
-		const [r] = await sql`delete from affiliation_requests r using users o
-			where r.org_id = ${orgId}::bigint and r.user_id = ${viewer.id}::bigint and o.id = r.org_id and o.verified_type in ('business', 'government') returning o.screen_name`;
+		const [r] = await sql`delete from affiliation_requests
+			where org_id = ${orgId}::bigint and user_id = ${viewer.id}::bigint
+				and org_id in (select id from users where verified_type in ('business', 'government'))
+			returning (select screen_name from users where id = ${orgId}::bigint) as screen_name`;
 		if (!r) return view(req, viewer, "That request is gone.");
 		if (action === "decline") return view(req, viewer, "", `You declined @${r.screen_name}.`);
 		// one organisation per person; accepting moves them

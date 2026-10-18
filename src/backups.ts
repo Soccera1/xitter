@@ -1,15 +1,16 @@
-// Database backups for Admin > Backups: pg_dump's custom format (compressed,
-// restored with pg_restore), kept in BACKUP_DIR. Uploaded files live in
+// Database backups for Admin > Backups: PostgreSQL custom dumps or standalone
+// SQLite snapshots, kept in BACKUP_DIR. Uploaded files live in
 // media/ and data/ and are not part of it; copy those directories as well.
 
-import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { recordError } from "./errors";
 import { settings } from "./settings";
+import { databaseBackend, databaseURL, snapshotSQLite } from "./db";
 
 export const BACKUP_DIR = process.env.BACKUP_DIR ?? "data/backups";
 const PG_DUMP = process.env.PG_DUMP ?? "pg_dump";
-const NAME = /^xitter-\d{8}-\d{6}\.dump$/;
+const NAME = /^xitter-\d{8}-\d{6}(?:-\d{3})?\.(?:dump|sqlite)$/;
 
 export const isBackupName = (name: string) => NAME.test(name);
 export const backupPath = (name: string) => (isBackupName(name) ? join(BACKUP_DIR, name) : undefined);
@@ -17,7 +18,7 @@ export const backupPath = (name: string) => (isBackupName(name) ? join(BACKUP_DI
 export function listBackups() {
 	if (!existsSync(BACKUP_DIR)) return [];
 	return readdirSync(BACKUP_DIR)
-		.filter(isBackupName)
+		.filter(name => isBackupName(name) && name.endsWith(databaseBackend === "sqlite" ? ".sqlite" : ".dump"))
 		.map((name) => {
 			const s = statSync(join(BACKUP_DIR, name));
 			return { name, bytes: s.size, created_at: s.mtime.toISOString() };
@@ -31,15 +32,22 @@ let running: Promise<{ name: string; bytes: number }> | undefined;
 export function createBackup() {
 	running ??= (async () => {
 		mkdirSync(BACKUP_DIR, { recursive: true });
-		const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
-		const name = `xitter-${stamp.slice(0, 8)}-${stamp.slice(8)}.dump`;
+		const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 17);
+		const name = `xitter-${stamp.slice(0, 8)}-${stamp.slice(8, 14)}-${stamp.slice(14)}.${databaseBackend === "sqlite" ? "sqlite" : "dump"}`;
 		const path = join(BACKUP_DIR, name);
-		const dump = Bun.spawn([PG_DUMP, "--format=custom", "--no-owner", "--file", path, process.env.DATABASE_URL ?? "postgres://dev@localhost:5432/xitter"], { stderr: "pipe", stdout: "ignore" });
+		const partial = `${path}.partial`;
+		if (databaseBackend === "sqlite") {
+			try { await snapshotSQLite(partial); renameSync(partial, path); }
+			catch (e) { if (existsSync(partial)) unlinkSync(partial); throw e; }
+			return { name, bytes: statSync(path).size };
+		}
+		const dump = Bun.spawn([PG_DUMP, "--format=custom", "--no-owner", "--file", partial, databaseURL], { stderr: "pipe", stdout: "ignore" });
 		const [code, err] = await Promise.all([dump.exited, new Response(dump.stderr).text()]);
 		if (code !== 0) {
-			if (existsSync(path)) unlinkSync(path);
+			if (existsSync(partial)) unlinkSync(partial);
 			throw new Error(`pg_dump failed: ${err.trim().split("\n").pop() || `exit ${code}`}`);
 		}
+		renameSync(partial, path);
 		return { name, bytes: statSync(path).size };
 	})().finally(() => {
 		running = undefined;

@@ -3,7 +3,7 @@
 // and organisations managing their own affiliates. Settings are put back afterwards.
 // usage: bun scripts/test-admin-more.ts <admin> <org> <password>
 import { createUser } from "../src/auth";
-import { sql } from "../src/db";
+import { sql, databaseBackend } from "../src/db";
 import { recordError } from "../src/errors";
 import { ipAllowed, parseRange } from "../src/staff-access";
 
@@ -93,13 +93,14 @@ try {
 	// backups
 	check((await support.admin("backups")).status === 403, "backups are admin only");
 	const made = await admin.admin("createBackup");
-	check(made.status === 200 && /^xitter-\d{8}-\d{6}\.dump$/.test(made.data.name) && made.data.bytes > 0, `backup made (${made.data.error ?? ""})`);
+	check(made.status === 200 && /^xitter-\d{8}-\d{6}(?:-\d{3})?\.(?:dump|sqlite)$/.test(made.data.name) && made.data.bytes > 0, `backup made (${made.data.error ?? ""})`);
 	backup = made.data.name;
 	check((await admin.admin("backups")).data.backups.some((b: any) => b.name === backup), "backup listed");
+	const magic = databaseBackend === "sqlite" ? "SQLite format 3" : "PGDMP";
 	const download = await fetch(`${origin}/admin/backups/${backup}`, { headers: { cookie: admin.headers.cookie } });
-	check(download.status === 200 && new Uint8Array(await download.arrayBuffer()).slice(0, 5).every((b, i) => b === "PGDMP".charCodeAt(i)), "backup downloads as a pg_dump archive");
+	check(download.status === 200 && new Uint8Array(await download.arrayBuffer()).slice(0, magic.length).every((b, i) => b === magic.charCodeAt(i)), "backup downloads in the configured database format");
 	// everyone else gets the client's page, as for any address it doesn't know
-	check(!(await (await fetch(`${origin}/admin/backups/${backup}`, { headers: { cookie: support.headers.cookie } })).text()).startsWith("PGDMP"), "support can't download");
+	check(!(await (await fetch(`${origin}/admin/backups/${backup}`, { headers: { cookie: support.headers.cookie } })).text()).startsWith(magic), "support can't download");
 	check((await fetch(`${origin}/admin/backups/..%2F..%2F.env`, { headers: { cookie: admin.headers.cookie } })).status === 404, "only backup names");
 	check((await admin.admin("saveBackupSchedule", { daily: true, keep: 0 })).status === 400, "keep at least one");
 	check((await admin.admin("deleteBackup", { name: backup })).status === 200, "backup deleted");

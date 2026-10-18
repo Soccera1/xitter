@@ -2,7 +2,7 @@
 
 A self-hosted backend for the X (Twitter) web client. The server hosts a pinned
 build of the official client from your own domain and answers its API from
-Postgres, so the real x.com interface runs against your own instance.
+Postgres or SQLite, so the real x.com interface runs against your own instance.
 
 The client itself is not in this repository. Each instance downloads its own
 copy during setup, and it stays on that machine.
@@ -82,7 +82,7 @@ every mail tried.
 ### What you need
 
 - [Bun](https://bun.sh) 1.4 or newer
-- PostgreSQL 14 or newer, with an empty database
+- PostgreSQL 14 or newer with an empty database, or SQLite (built into Bun 1.4.3 or newer)
 - Optional: [ffmpeg](https://ffmpeg.org) on the PATH, for video uploads
 
 ### Steps
@@ -95,6 +95,9 @@ bun install
 # 1. a database (any name; set DATABASE_URL if it isn't the default below)
 createdb xitter
 export DATABASE_URL=postgres://<user>@localhost:5432/xitter
+
+# Or use SQLite, with no database server or extra packages:
+# export DATABASE_URL=sqlite://data/xitter.sqlite
 
 # 2. download a client build (no X account needed)
 bun scripts/fetch-client.ts
@@ -124,6 +127,34 @@ the current build. `--token <auth_token>` (the cookie from a signed-in x.com
 tab) or `--har <file>` pins the signed-in page instead, with that account's
 switches; nothing about the account is kept.
 
+### Using SQLite
+
+Set `DATABASE_URL=sqlite://data/xitter.sqlite` before running any account scripts
+or starting the server. Relative paths resolve from the working directory;
+`sqlite:///absolute/path/xitter.sqlite` uses an absolute path. The parent directory,
+database, schema, and indexes are created automatically. Use the same value for
+all scripts and the server. `sqlite://:memory:` is available for single-process
+tests; each process gets its own empty database.
+
+SQLite supports the same application features, including chat, polls, ranked
+feeds, notifications, analytics, and admin tools. It uses foreign keys, WAL mode,
+and a 10-second busy timeout. Writes are serialized; keep the database on local
+persistent storage and use PostgreSQL when you need multiple server machines
+or higher write concurrency. The PostgreSQL pool and query timeout variables
+do not apply to SQLite.
+
+Admin > Backups creates consistent `.sqlite` snapshots, including committed WAL
+data, without an external tool. To restore, stop **all** processes using the
+database, replace the configured database file with the snapshot, remove the old
+file's `-wal` and `-shm` sidecars, then restart. Back up uploaded files in `media/`
+and instance files in `data/` as well. PostgreSQL backups remain `.dump` files
+restored with `pg_restore`. Backups restore to the same database engine; changing
+`DATABASE_URL` does not transfer existing data between engines.
+
+Run the self-contained SQLite regression checks with `bun run test:sqlite`.
+Database changes must update both `src/schema.sql` and the versioned SQLite
+schema/migrations in `src/db.ts` and `src/schema.sqlite.sql`.
+
 ### With Docker Compose
 
 `compose.yaml` runs Xitter and Postgres 18, with ffmpeg and `pg_dump` in the
@@ -145,6 +176,19 @@ any variable from the Configuration table can be added to `.env`.
 `FETCH_CLIENT=0` skips the first-start download; `docker compose exec app bun
 scripts/fetch-client.ts --latest` re-pins the build.
 
+For SQLite, use the standalone Compose file instead:
+
+```sh
+docker compose -f compose.sqlite.yaml up -d --build
+docker compose -f compose.sqlite.yaml exec app bun scripts/create-user.ts <name> <password> "<display name>"
+docker compose -f compose.sqlite.yaml exec app bun scripts/make-admin.ts <name>
+```
+
+This stores the SQLite database in the `data` volume. An optional `.env` can set
+`PUBLIC_ORIGIN`, `HOST_PORT`, mail keys, and the other settings below. The optional
+Juicebox service for chat passcode recovery is a separate service with its own
+PostgreSQL database; application SQLite support does not change that service.
+
 ### Keep these private
 
 - An `auth_token` cookie is a live login to your X account. Use it only for
@@ -156,9 +200,11 @@ scripts/fetch-client.ts --latest` re-pins the build.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `DATABASE_URL` | `postgres://dev@localhost:5432/xitter` | Postgres connection |
+| `DATABASE_URL` | `postgres://dev@localhost:5432/xitter` | PostgreSQL connection URL or `sqlite://data/xitter.sqlite` |
+| `BACKUP_DIR` | `data/backups` | Database backups made from the admin panel or daily schedule |
+| `PG_DUMP` | `pg_dump` | PostgreSQL backup executable; SQLite snapshots need no external tool |
 | `DB_POOL_MAX` | `20` | Postgres connections the server keeps open |
-| `DB_STATEMENT_TIMEOUT`, `DB_LOCK_TIMEOUT` | `30s`, `10s` | A query running or waiting on a lock longer than this is cancelled, so one stuck query can't hold every connection (the migration at start-up has no limit) |
+| `DB_STATEMENT_TIMEOUT`, `DB_LOCK_TIMEOUT` | `30s`, `10s` | PostgreSQL only: a query running or waiting on a lock longer than this is cancelled, so one stuck query can't hold every connection (the migration at start-up has no limit) |
 | `PORT` | `3000` | Listen port |
 | `PUBLIC_ORIGIN` | `http://localhost:$PORT` | Address browsers use to reach the instance |
 | `CLIENT_DIR` | `client` | Where the pinned client is stored |

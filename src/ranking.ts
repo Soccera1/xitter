@@ -109,7 +109,7 @@ async function rank(viewerId: string, asOf: string): Promise<Ranked> {
 		),
 		-- one entry per post: the best of the post itself and its reposts
 		best as (
-			select distinct on (post_id) * from scored order by post_id, score desc, item_id desc
+			select * from (select scored.*, row_number() over (partition by post_id order by score desc, item_id desc) as choice from scored) ranked where choice = 1
 		)
 		select * from best order by score desc, item_id desc limit ${CANDIDATES}`;
 

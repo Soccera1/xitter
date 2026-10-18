@@ -1,7 +1,7 @@
 // Polls are cards: the composer creates the card first (caps /v2/cards/create),
 // then posts with card_uri. Voting goes through the card passthrough endpoint.
 
-import { sql } from "./db";
+import { sql, databaseBackend } from "./db";
 import { isId, newId } from "./ids";
 import { mediaUrl } from "./media";
 import { forbiddenText } from "./names";
@@ -73,7 +73,12 @@ export function pollCard(p: PollRow) {
 
 export async function pollsByIds(viewerId: string, ids: string[]): Promise<Map<string, PollRow>> {
 	if (!ids.length) return new Map();
-	const rows = await sql`select p.id::text, p.choices, p.duration_minutes, p.ends_at,
+	const rows = databaseBackend === "sqlite" ? await sql`select p.id::text, p.choices, p.duration_minutes, p.ends_at,
+		case when p.choice_media is null then null else (select json_group_array(case when m.id is null then null else json_object('id', cast(m.id as text), 'mime', m.mime, 'width', m.width, 'height', m.height) end order by c.key)
+			from json_each(p.choice_media) c left join media m on m.id = cast(c.value as integer)) end as images,
+		(select json_group_array((select count(*) from poll_votes v where v.poll_id = p.id and v.choice = c.key + 1) order by c.key) from json_each(p.choices) c) as counts,
+		(select v.choice from poll_votes v where v.poll_id = p.id and v.user_id = ${viewerId}::bigint) as voted
+		from polls p where p.id = any(${sql.array(ids, "INT8")})` : await sql`select p.id::text, p.choices, p.duration_minutes, p.ends_at,
 			case when p.choice_media is null then null else (select json_agg(case when m.id is null then null else json_build_object('id', m.id::text, 'mime', m.mime, 'width', m.width, 'height', m.height) end order by c.n)
 				from unnest(p.choice_media) with ordinality as c(media_id, n) left join media m on m.id = c.media_id) end as images,
 			coalesce((select array_agg(c.n order by c.choice) from (

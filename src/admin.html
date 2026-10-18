@@ -264,10 +264,10 @@ const RENDER = {
 	},
 
 	async backups(main) {
-		const { backups, schedule, dir } = await api("backups");
+		const { backups, schedule, dir, backend } = await api("backups");
 		const size = (n) => n < 1048576 ? Math.ceil(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB";
 		main.innerHTML = "<h1>Backups</h1>" +
-			'<p class="dim">Dumps of the database (pg_dump\'s custom format) in <span class="code">' + esc(dir) + '</span> on the server. Uploaded media and branding are files in media/ and data/: copy those directories too. To restore, stop the server and run <span class="code">pg_restore --clean --if-exists -d "$DATABASE_URL" &lt;file&gt;</span>.</p>' +
+			'<p class="dim">Database backups in <span class="code">' + esc(dir) + '</span> on the server. Uploaded media and branding are files in media/ and data/: copy those directories too. ' + (backend === "sqlite" ? 'To restore a SQLite snapshot, stop all server and CLI processes, replace the database file with the .sqlite backup and remove the old database’s -wal and -shm files before restarting.' : 'To restore, stop the server and run <span class="code">pg_restore --clean --if-exists -d "$DATABASE_URL" &lt;file&gt;</span>.') + '</p>' +
 			'<div class="box" style="margin-bottom:16px"><h2>Schedule</h2><div class="row"><label class="row"><input type="checkbox" id="bdaily"' + (schedule.daily ? " checked" : "") + "> A backup every day</label>" +
 			'<label class="row small">keep the newest <input id="bkeep" type="number" min="1" max="90" style="width:70px" value="' + schedule.keep + '"></label><button class="btn" id="bsave">Save</button></div></div>' +
 			'<div class="row" style="margin-bottom:16px"><button class="btn primary" id="bnow">Back up now</button></div>' +

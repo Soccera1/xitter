@@ -3,7 +3,7 @@
 // edge's country header, see countries.ts). Kept in users.preferences.explore.
 
 import { allCountries, countryName, isCountry } from "./countries";
-import { sql } from "./db";
+import { sql, databaseBackend } from "./db";
 
 export const WORLDWIDE = "1";
 
@@ -35,7 +35,9 @@ export async function setExploreSettings(userId: string, body: Record<string, un
 	if (place !== undefined && (place === WORLDWIDE || isCountry(place))) next.place = place;
 	for (const k of ["use_current_location", "use_personalized_trends"] as const)
 		if (body[k] !== undefined) next[k] = body[k] === true || body[k] === "true";
-	await sql`update users set preferences = jsonb_set(preferences, '{explore}', coalesce(preferences->'explore', '{}') || ${JSON.stringify(next)}::text::jsonb)
+	await sql`update users set preferences = ${databaseBackend === "sqlite"
+		? sql`json_set(preferences, '$.explore', json_patch(coalesce(preferences->'explore', '{}'), ${JSON.stringify(next)}))`
+		: sql`jsonb_set(preferences, '{explore}', coalesce(preferences->'explore', '{}') || ${JSON.stringify(next)}::text::jsonb)`}
 		where id = ${userId}::bigint`;
 	return exploreSettings(userId);
 }

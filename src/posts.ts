@@ -1,5 +1,5 @@
 import type { User } from "./auth";
-import { sql } from "./db";
+import { sql, databaseBackend } from "./db";
 import { newId } from "./ids";
 import { hateIn } from "./hate";
 import { automodStrike } from "./moderation";
@@ -144,7 +144,9 @@ export async function postsByIds(viewerId: string, ids: string[], quotes = true)
 	// being shown a post counts once per viewer; nobody waits for it
 	const seen = posts.filter((p) => p.author.id !== viewerId).map((p) => p.id);
 	if (seen.length)
-		void sql`insert into post_views (post_id, user_id) select x, ${viewerId}::bigint from unnest(${sql.array(seen, "INT8")}::bigint[]) x on conflict do nothing`.catch(() => {});
+		void (databaseBackend === "sqlite"
+			? sql`insert into post_views (post_id, user_id) select cast(value as integer), ${viewerId}::bigint from json_each(${sql.array(seen, "INT8")}) where true on conflict do nothing`
+			: sql`insert into post_views (post_id, user_id) select x, ${viewerId}::bigint from unnest(${sql.array(seen, "INT8")}::bigint[]) x on conflict do nothing`).catch(() => {});
 	const out = new Map(posts.map((p) => [p.id, p]));
 	const unknown = ids.filter((id) => !out.has(id));
 	if (unknown.length) {

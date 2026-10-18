@@ -7,7 +7,7 @@ import { existsSync, realpathSync, unlinkSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { type Action, AdminError, audit, guard, idOf } from "./admin";
 import { loadBuild } from "./build";
-import { sql } from "./db";
+import { sql, databaseBackend, databaseBytes } from "./db";
 import { newId } from "./ids";
 import { MEDIA_DIR, sniffImage } from "./media";
 import { NOTICE_TYPES } from "./model";
@@ -504,12 +504,12 @@ export const toolActions: Record<string, Action> = {
 		role: "support",
 		run: async () => {
 			const started = performance.now();
-			const [db] = await sql`select pg_database_size(current_database())::text as bytes`;
+			const bytes = await databaseBytes();
 			return {
 				runtime: Bun.version,
 				uptime: Math.floor(process.uptime()),
 				memory: process.memoryUsage().rss,
-				database: { bytes: db.bytes, latency_ms: Math.round(performance.now() - started) },
+				database: { bytes, backend: databaseBackend, latency_ms: Math.round(performance.now() - started) },
 				client_build: loadBuild()?.build.sha ?? null,
 			};
 		},
@@ -545,8 +545,8 @@ export const toolActions: Record<string, Action> = {
 		},
 	},
 
-	// backups.ts; restoring is pg_restore on the server, not something done from a browser
-	backups: { role: "admin", run: async () => ({ backups: listBackups(), schedule: settings().backups, dir: BACKUP_DIR }) },
+	// Restoring a PostgreSQL dump or SQLite snapshot is done on the server.
+	backups: { role: "admin", run: async () => ({ backups: listBackups(), schedule: settings().backups, dir: BACKUP_DIR, backend: databaseBackend }) },
 	createBackup: {
 		role: "admin",
 		run: async (a) => {
@@ -653,10 +653,10 @@ export const toolActions: Record<string, Action> = {
 		role: "support",
 		run: async () => ({
 			tree: await sql`with recursive tree as (
-				select u.id, u.screen_name, null::bigint as parent, 0 as depth, array[u.id] as path from users u
+				select u.id, u.screen_name, null::bigint as parent, 0 as depth, ${databaseBackend === "sqlite" ? sql`json_array(cast(u.id as text))` : sql`array[u.id]`} as path from users u
 					where u.invite_code is null or not exists (select 1 from invites i where i.code = u.invite_code and i.created_by is not null)
 				union all
-				select u.id, u.screen_name, t.id, t.depth + 1, t.path || u.id from tree t
+				select u.id, u.screen_name, t.id, t.depth + 1, ${databaseBackend === "sqlite" ? sql`json_insert(t.path, '$[#]', cast(u.id as text))` : sql`t.path || u.id`} from tree t
 					join invites i on i.created_by = t.id join users u on u.invite_code = i.code
 					where t.depth < 10 and not u.id = any(t.path)
 			) select id::text, screen_name, parent::text, depth from tree order by path limit 1000`,

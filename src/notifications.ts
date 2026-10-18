@@ -4,10 +4,10 @@
 // for, and replies, quotes and mentions (shown as the posts themselves). Entries sort by time in milliseconds, which is also what
 // the cursors and the read marker hold.
 
-import { blockedFor, hasMutedWord, mutedFor, suspendedFor } from "./blocks";
+import { hasMutedWord, suspendedFor } from "./blocks";
 import type { User } from "./auth";
 import { PUBLIC_ORIGIN } from "./config";
-import { sql } from "./db";
+import { sql, databaseBackend } from "./db";
 import { plainTweetResult, tweetResult, userResult } from "./model";
 import type { PostRow } from "./model";
 import { postsByIds } from "./posts";
@@ -33,8 +33,10 @@ async function items(viewerId: string, opts: { before?: number; after?: number; 
 	const hi = opts.before ? new Date(opts.before) : new Date(8.64e15);
 	const out: Item[] = [];
 	// nothing from blocked or muted accounts, nor posts holding a muted word
-	const hidden = sql`(select x.id from ${blockedFor(viewerId)} as x(id) union all select x.id from ${mutedFor(viewerId)} as x(id)
-		union all select x.id from ${suspendedFor(viewerId)} as x(id))`;
+	const hidden = sql`(select blocked_id as id from blocks where blocker_id = ${viewerId}::bigint
+		union all select blocker_id from blocks where blocked_id = ${viewerId}::bigint
+		union all select muted_id from mutes where muter_id = ${viewerId}::bigint
+		union all select id from users where id in ${suspendedFor(viewerId)})`;
 
 	if (!opts.mentionsOnly) {
 		for (const kind of ["like", "repost"] as const) {
@@ -44,24 +46,24 @@ async function items(viewerId: string, opts: { before?: number; after?: number; 
 			const recent = opts.after !== undefined ? sql`and a.post_id in (select n.post_id from ${table} n where n.created_at >= ${lo})` : sql``;
 			const rows = await sql`
 				select a.post_id, max(a.created_at) as at, count(*)::int as total,
-					(array_agg(a.user_id order by a.created_at desc))[1:${SHOWN_USERS}] as users
+					${databaseBackend === "sqlite" ? sql`json_group_array(cast(a.user_id as text) order by a.created_at desc)` : sql`(array_agg(a.user_id order by a.created_at desc))[1:${SHOWN_USERS}]`} as users
 				from ${table} a join posts p on p.id = a.post_id
 				where p.user_id = ${viewerId}::bigint and a.user_id <> ${viewerId}::bigint and a.user_id not in ${hidden} ${recent}
 				group by a.post_id
 				having max(a.created_at) >= ${lo} and max(a.created_at) < ${hi}
 				order by at desc limit ${opts.limit}`;
 			for (const r of rows)
-				out.push({ kind, key: `${kind}-${r.post_id}`, at: ms(r.at), users: r.users.map(String), total: r.total, postId: String(r.post_id) });
+				out.push({ kind, key: `${kind}-${r.post_id}`, at: ms(r.at), users: r.users.slice(0, SHOWN_USERS).map(String), total: r.total, postId: String(r.post_id) });
 		}
 		const follows = await sql`
 			select date_trunc('day', f.created_at) as day, max(f.created_at) as at, count(*)::int as total,
-				(array_agg(f.follower_id order by f.created_at desc))[1:${SHOWN_USERS}] as users
+				${databaseBackend === "sqlite" ? sql`json_group_array(cast(f.follower_id as text) order by f.created_at desc)` : sql`(array_agg(f.follower_id order by f.created_at desc))[1:${SHOWN_USERS}]`} as users
 			from follows f where f.followee_id = ${viewerId}::bigint and f.follower_id not in ${hidden}
 				and f.created_at >= date_trunc('day', ${lo}::timestamptz)
 			group by 1
 			having max(f.created_at) >= ${lo} and max(f.created_at) < ${hi}
 			order by at desc limit ${opts.limit}`;
-		for (const r of follows) out.push({ kind: "follow", key: `follow-${ms(r.day)}`, at: ms(r.at), users: r.users.map(String), total: r.total });
+		for (const r of follows) out.push({ kind: "follow", key: `follow-${ms(r.day)}`, at: ms(r.at), users: r.users.slice(0, SHOWN_USERS).map(String), total: r.total });
 
 		// posts made after the bell was rung; replies don't count, as on X
 		const rung = await sql`select p.id, p.user_id, p.created_at as at from posts p
