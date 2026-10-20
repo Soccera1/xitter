@@ -1,3 +1,4 @@
+import type { Fragment } from "./db/query";
 // Previews of this instance's links in other apps (Discord, Slack, iMessage,
 // Telegram, Mastodon…). Their link fetchers are signed out, so a signed-out
 // request for a post or a profile gets a small page with its OpenGraph and
@@ -20,8 +21,8 @@ const clip = (s: string, n: number) => ([...s].length > n ? `${[...s].slice(0, n
 type Author = { id: string; screen_name: string; name: string; bio: string; avatar_url: string | null };
 
 // an account anyone may see: not protected, suspended, limited or deactivated
-async function publicAuthor(where: ReturnType<typeof sql>): Promise<Author | undefined> {
-	const [u] = await sql`select id::text, screen_name, name, bio, avatar_url from users
+async function publicAuthor(where: Fragment): Promise<Author | undefined> {
+	const [u] = await sql`select ${sql.cast(sql`id`, "text")} as id, screen_name, name, bio, avatar_url from users
 		where ${where} and not protected and status in ('active', 'restricted') and deactivated_at is null`;
 	return u as Author | undefined;
 }
@@ -29,14 +30,14 @@ async function publicAuthor(where: ReturnType<typeof sql>): Promise<Author | und
 type Post = { id: string; text: string; created_at: Date; author: Author; image?: { id: string; kind: string; mime: string; width: number; height: number } };
 
 async function publicPost(id: string): Promise<Post | undefined> {
-	const [p] = await sql`select id::text, user_id::text, text, created_at, sensitive from posts where id = ${id}::bigint and not hidden`;
+	const [p] = await sql`select ${sql.cast(sql`id`, "text")} as id, ${sql.cast(sql`user_id`, "text")} as user_id, text, created_at, sensitive from posts where id = ${sql.cast(id, "bigint")} and not hidden`;
 	if (!p) return undefined;
-	const author = await publicAuthor(sql`id = ${p.user_id}::bigint`);
+	const author = await publicAuthor(sql`id = ${sql.cast(p.user_id, "bigint")}`);
 	if (!author) return undefined;
 	const [m] = p.sensitive
 		? []
-		: await sql`select id::text, kind, mime, width, height from media
-			where post_id = ${id}::bigint and state = 'ready' and sensitive_warning is null order by position nulls last limit 1`;
+		: await sql`select ${sql.cast(sql`id`, "text")} as id, kind, mime, width, height from media
+			where post_id = ${sql.cast(id, "bigint")} and state = 'ready' and sensitive_warning is null order by position nulls last limit 1`;
 	return { id: p.id, text: p.text, created_at: p.created_at, author, image: m as Post["image"] };
 }
 
@@ -138,10 +139,10 @@ export async function embedImage(pathname: string): Promise<Response> {
 	}
 	const avatar = /^\/embed\/avatar\/(\d{1,19})$/.exec(pathname);
 	if (avatar) {
-		const a = await publicAuthor(sql`id = ${avatar[1]}::bigint`);
+		const a = await publicAuthor(sql`id = ${sql.cast(avatar[1], "bigint")}`);
 		const id = a && avatarId(a);
 		if (!id) return none;
-		const [m] = await sql`select mime from media where id = ${id}::bigint`;
+		const [m] = await sql`select mime from media where id = ${sql.cast(id, "bigint")}`;
 		return m ? fileResponse(join(MEDIA_DIR, id), m.mime) : none;
 	}
 	return none;

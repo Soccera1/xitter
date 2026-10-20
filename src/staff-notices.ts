@@ -23,20 +23,20 @@ async function submitAppeal(userId: string, body: unknown, messageId?: unknown) 
 	let message: string | null = null;
 	if (messageId) {
 		if (!isId(messageId)) throw new Error("Invalid message.");
-		const [row] = await sql`select id::text from staff_messages where id = ${messageId}::bigint and user_id = ${userId}::bigint and revoked_at is null`;
+		const [row] = await sql`select ${sql.cast(sql`id`, "text")} as id from staff_messages where id = ${sql.cast(messageId, "bigint")} and user_id = ${sql.cast(userId, "bigint")} and revoked_at is null`;
 		if (!row) throw new Error("No such message.");
 		message = row.id;
 	}
-	const rows = await sql`insert into moderation_appeals (id, user_id, message_id, body) values (${newId()}::bigint, ${userId}::bigint, ${message}::bigint, ${text})
-		on conflict (user_id) where status = 'open' do nothing returning id::text`;
+	const rows = await sql`insert into moderation_appeals (id, user_id, message_id, body) values (${sql.cast(newId(), "bigint")}, ${sql.cast(userId, "bigint")}, ${sql.cast(message, "bigint")}, ${text})
+		on conflict (user_id) where status = 'open' do nothing returning ${sql.cast(sql`id`, "text")} as id`;
 	if (!rows.length) throw new Error("You already have an open appeal.");
 	return { id: rows[0].id };
 }
 
 const messagesOf = (userId: string) =>
-	sql`select id::text, kind, body, created_at, read_at, revoked_at from staff_messages where user_id = ${userId}::bigint order by id desc limit 100`;
+	sql`select ${sql.cast(sql`id`, "text")} as id, kind, body, created_at, read_at, revoked_at from staff_messages where user_id = ${sql.cast(userId, "bigint")} order by id desc limit 100`;
 const appealsOf = (userId: string) =>
-	sql`select id::text, body, status, staff_reply, created_at, resolved_at from moderation_appeals where user_id = ${userId}::bigint order by id desc limit 30`;
+	sql`select ${sql.cast(sql`id`, "text")} as id, body, status, staff_reply, created_at, resolved_at from moderation_appeals where user_id = ${sql.cast(userId, "bigint")} order by id desc limit 30`;
 
 // GET: the viewer's messages and appeals; POST: appeal, or mark a message read
 export async function noticesApi(req: Request, v: Viewer) {
@@ -46,7 +46,7 @@ export async function noticesApi(req: Request, v: Viewer) {
 	try {
 		if (b.action === "appeal") return Response.json(await submitAppeal(v.id, b.body, b.messageId));
 		if (b.action === "read" && isId(b.id)) {
-			await sql`update staff_messages set read_at = coalesce(read_at, now()) where id = ${b.id}::bigint and user_id = ${v.id}::bigint`;
+			await sql`update staff_messages set read_at = coalesce(read_at, now()) where id = ${sql.cast(b.id, "bigint")} and user_id = ${sql.cast(v.id, "bigint")}`;
 			return Response.json({});
 		}
 		return Response.json({ error: "Unknown action." }, { status: 400 });
@@ -58,7 +58,7 @@ export async function noticesApi(req: Request, v: Viewer) {
 export async function noticesPage(req: Request, v: Viewer) {
 	const [messages, appeals] = await Promise.all([messagesOf(v.id), appealsOf(v.id)]);
 	// opening the page reads them
-	await sql`update staff_messages set read_at = now() where user_id = ${v.id}::bigint and read_at is null`;
+	await sql`update staff_messages set read_at = now() where user_id = ${sql.cast(v.id, "bigint")} and read_at is null`;
 	const open = appeals.some((a: any) => a.status === "open");
 	const list = messages.length
 		? messages.map((m: any) => `<div class="card ${esc(m.kind)}">
@@ -139,7 +139,7 @@ export async function appealRoute(req: Request, address: string) {
 	if (!cookie || form.get("csrf") !== cookie) return page("The form expired. Try again.", 403);
 	const handle = String(form.get("username") ?? "").trim().replace(/^@/, "").toLowerCase().slice(0, 15);
 	if (used("password", handle)) return page("Too many tries for that account. Wait 15 minutes.", 429);
-	const [user] = await sql`select id::text, password_hash from users where lower(screen_name) = ${handle}`;
+	const [user] = await sql`select ${sql.cast(sql`id`, "text")} as id, password_hash from users where lower(screen_name) = ${handle}`;
 	const valid = await Bun.password.verify(String(form.get("password") ?? "").slice(0, 1024), user?.password_hash ?? (await dummyHash)).catch(() => false);
 	if (!user || !valid) {
 		hit("password", handle);

@@ -57,13 +57,13 @@ function lines(value: unknown, what: string, tags = false) {
 }
 
 async function badgeExists(id: string | null) {
-	if (id && !(await sql`select 1 from custom_badges where id = ${id}::bigint`).length) throw new AdminError("No such badge.");
+	if (id && !(await sql`select 1 from custom_badges where id = ${sql.cast(id, "bigint")}`).length) throw new AdminError("No such badge.");
 }
 
 export const toolActions: Record<string, Action> = {
 	// custom badges: an image shown in the badge slot after a name
-	badges: { role: "support", run: async () => ({ badges: await sql`select id::text, name, mime, created_at,
-		(select count(*)::int from users u where u.org_badge_id = b.id or exists (select 1 from user_badges ub where ub.user_id = u.id and ub.badge_id = b.id)) as users
+	badges: { role: "support", run: async () => ({ badges: await sql`select ${sql.cast(sql`id`, "text")} as id, name, mime, created_at,
+		(select ${sql.cast(sql`count(*)`, "int")} from users u where u.org_badge_id = b.id or exists (select 1 from user_badges ub where ub.user_id = u.id and ub.badge_id = b.id)) as users
 		from custom_badges b order by name` }) },
 	createBadge: {
 		role: "admin",
@@ -76,7 +76,7 @@ export const toolActions: Record<string, Action> = {
 			if (image.length > 256 * 1024 || !info || !["image/png", "image/jpeg", "image/webp"].includes(info.mime) || info.width > 1024 || info.height > 1024)
 				throw new AdminError("Use a PNG, JPEG or WebP up to 1024×1024 and 256 KB.");
 			const id = newId();
-			await sql`insert into custom_badges (id, name, image, mime) values (${id}::bigint, ${name}, ${image}, ${info.mime})`;
+			await sql`insert into custom_badges (id, name, image, mime) values (${sql.cast(id, "bigint")}, ${name}, ${image}, ${info.mime})`;
 			await audit(a, "create_badge", id, { name });
 			return { id };
 		},
@@ -85,14 +85,14 @@ export const toolActions: Record<string, Action> = {
 		role: "admin",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			await sql`delete from custom_badges where id = ${id}::bigint`;
+			await sql`delete from custom_badges where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "delete_badge", id);
 			return {};
 		},
 	},
 	// profile labels: text where X shows "Parody account", with a badge as the icon
-	labels: { role: "support", run: async () => ({ labels: await sql`select l.id::text, l.text, l.badge_id::text, l.url, l.created_at,
-		(select count(*)::int from users u where u.label_id = l.id) as users
+	labels: { role: "support", run: async () => ({ labels: await sql`select ${sql.cast(sql`l.id`, "text")} as id, l.text, ${sql.cast(sql`l.badge_id`, "text")} as badge_id, l.url, l.created_at,
+		(select ${sql.cast(sql`count(*)`, "int")} from users u where u.label_id = l.id) as users
 		from account_labels l order by l.text` }) },
 	createLabel: {
 		role: "admin",
@@ -103,7 +103,7 @@ export const toolActions: Record<string, Action> = {
 			const url = optionalText(b.url, 500);
 			if (url && !/^https?:\/\/\S+$/.test(url)) throw new AdminError("The link must be an http or https address.");
 			const id = newId();
-			await sql`insert into account_labels (id, text, badge_id, url) values (${id}::bigint, ${text}, ${badge}::bigint, ${url || null})`;
+			await sql`insert into account_labels (id, text, badge_id, url) values (${sql.cast(id, "bigint")}, ${text}, ${sql.cast(badge, "bigint")}, ${url || null})`;
 			await audit(a, "create_label", id, { text });
 			return { id };
 		},
@@ -112,7 +112,7 @@ export const toolActions: Record<string, Action> = {
 		role: "admin",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			await sql`delete from account_labels where id = ${id}::bigint`;
+			await sql`delete from account_labels where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "delete_label", id);
 			return {};
 		},
@@ -125,11 +125,11 @@ export const toolActions: Record<string, Action> = {
 			await guard(a, id);
 			const pick = typeof b.label === "string" ? b.label : "None";
 			if (["None", "Parody", "Commentary", "Fan"].includes(pick)) {
-				await sql`update users set parody_label = ${pick}, label_id = null where id = ${id}::bigint`;
+				await sql`update users set parody_label = ${pick}, label_id = null where id = ${sql.cast(id, "bigint")}`;
 			} else {
 				const labelId = idOf(pick, "label");
-				if (!(await sql`select 1 from account_labels where id = ${labelId}::bigint`).length) throw new AdminError("No such label.");
-				await sql`update users set parody_label = 'None', label_id = ${labelId}::bigint where id = ${id}::bigint`;
+				if (!(await sql`select 1 from account_labels where id = ${sql.cast(labelId, "bigint")}`).length) throw new AdminError("No such label.");
+				await sql`update users set parody_label = 'None', label_id = ${sql.cast(labelId, "bigint")} where id = ${sql.cast(id, "bigint")}`;
 			}
 			await audit(a, "set_profile_label", id, { label: pick });
 			return {};
@@ -145,9 +145,9 @@ export const toolActions: Record<string, Action> = {
 			const badges = [...new Set(b.badgeIds.map((x: unknown) => idOf(x, "badge")))] as string[];
 			for (const badge of badges) await badgeExists(badge);
 			await sql.begin(async (tx) => {
-				await tx`delete from user_badges where user_id = ${id}::bigint`;
+				await tx`delete from user_badges where user_id = ${tx.cast(id, "bigint")}`;
 				for (const [position, badge] of badges.entries())
-					await tx`insert into user_badges (user_id, badge_id, position) values (${id}::bigint, ${badge}::bigint, ${position})`;
+					await tx`insert into user_badges (user_id, badge_id, position) values (${tx.cast(id, "bigint")}, ${tx.cast(badge, "bigint")}, ${position})`;
 			});
 			await audit(a, "set_badges", id, { badges });
 			return {};
@@ -161,7 +161,7 @@ export const toolActions: Record<string, Action> = {
 			await guard(a, id);
 			const badge = b.badgeId ? idOf(b.badgeId) : null;
 			await badgeExists(badge);
-			const rows = await sql`update users set org_badge_id = ${badge}::bigint where id = ${id}::bigint and verified_type in ('business', 'government') returning id`;
+			const rows = await sql`update users set org_badge_id = ${sql.cast(badge, "bigint")} where id = ${sql.cast(id, "bigint")} and verified_type in ('business', 'government') returning id`;
 			if (!rows.length) throw new AdminError("Only organisations have an organisation badge.");
 			await audit(a, "org_badge", id, { badge });
 			return {};
@@ -169,22 +169,22 @@ export const toolActions: Record<string, Action> = {
 	},
 
 	// notes about an account that only staff see
-	staffNotes: { role: "support", run: async (_a, b) => ({ notes: await sql`select n.id::text, n.body, n.created_at, u.screen_name as actor
-		from staff_notes n left join users u on u.id = n.actor_id where n.user_id = ${idOf(b.id)}::bigint order by n.id desc limit 100` }) },
+	staffNotes: { role: "support", run: async (_a, b) => ({ notes: await sql`select ${sql.cast(sql`n.id`, "text")} as id, n.body, n.created_at, u.screen_name as actor
+		from staff_notes n left join users u on u.id = n.actor_id where n.user_id = ${sql.cast(idOf(b.id), "bigint")} order by n.id desc limit 100` }) },
 	addStaffNote: {
 		role: "support",
 		run: async (a, b) => {
 			const id = idOf(b.id);
 			await guard(a, id);
-			await sql`insert into staff_notes (id, user_id, actor_id, body) values (${newId()}::bigint, ${id}::bigint, ${a.id}::bigint, ${textOf(b.body)})`;
+			await sql`insert into staff_notes (id, user_id, actor_id, body) values (${sql.cast(newId(), "bigint")}, ${sql.cast(id, "bigint")}, ${sql.cast(a.id, "bigint")}, ${textOf(b.body)})`;
 			await audit(a, "add_staff_note", id);
 			return {};
 		},
 	},
 
 	// messages, warnings and strikes: the account sees them in its notifications
-	staffMessages: { role: "support", run: async (_a, b) => ({ messages: await sql`select m.id::text, m.kind, m.body, m.created_at, m.read_at, m.revoked_at, u.screen_name as actor
-		from staff_messages m left join users u on u.id = m.actor_id where m.user_id = ${idOf(b.id)}::bigint order by m.id desc limit 100` }) },
+	staffMessages: { role: "support", run: async (_a, b) => ({ messages: await sql`select ${sql.cast(sql`m.id`, "text")} as id, m.kind, m.body, m.created_at, m.read_at, m.revoked_at, u.screen_name as actor
+		from staff_messages m left join users u on u.id = m.actor_id where m.user_id = ${sql.cast(idOf(b.id), "bigint")} order by m.id desc limit 100` }) },
 	sendStaffMessage: {
 		role: "moderator",
 		run: async (a, b) => {
@@ -193,7 +193,7 @@ export const toolActions: Record<string, Action> = {
 			const kind = b.kind ?? "message";
 			if (!["message", "warning", "strike"].includes(kind)) throw new AdminError("Unknown message type.");
 			const message = newId();
-			await sql`insert into staff_messages (id, user_id, actor_id, kind, body) values (${message}::bigint, ${id}::bigint, ${a.id}::bigint, ${kind}, ${textOf(b.body)})`;
+			await sql`insert into staff_messages (id, user_id, actor_id, kind, body) values (${sql.cast(message, "bigint")}, ${sql.cast(id, "bigint")}, ${sql.cast(a.id, "bigint")}, ${kind}, ${textOf(b.body)})`;
 			await audit(a, "send_staff_message", id, { kind, message });
 			const escalation = kind === "strike" && b.escalate !== false ? await escalate(id, a.id, `strike from @${a.screen_name}`) : undefined;
 			return { id: message, escalation };
@@ -203,10 +203,10 @@ export const toolActions: Record<string, Action> = {
 		role: "moderator",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			const [m] = await sql`select user_id::text from staff_messages where id = ${id}::bigint and kind = 'strike'`;
+			const [m] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id from staff_messages where id = ${sql.cast(id, "bigint")} and kind = 'strike'`;
 			if (!m) throw new AdminError("No such strike.");
 			await guard(a, m.user_id);
-			await sql`update staff_messages set revoked_at = now() where id = ${id}::bigint`;
+			await sql`update staff_messages set revoked_at = now() where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "revoke_strike", m.user_id, { message: id });
 			return {};
 		},
@@ -214,7 +214,7 @@ export const toolActions: Record<string, Action> = {
 
 	appeals: {
 		role: "moderator",
-		run: async (_a, b) => ({ appeals: await sql`select ap.id::text, ap.user_id::text, u.screen_name, u.name, u.avatar_url, u.status as user_status, ap.body, ap.status, ap.created_at, ap.staff_reply, ap.resolved_at,
+		run: async (_a, b) => ({ appeals: await sql`select ${sql.cast(sql`ap.id`, "text")} as id, ${sql.cast(sql`ap.user_id`, "text")} as user_id, u.screen_name, u.name, u.avatar_url, u.status as user_status, ap.body, ap.status, ap.created_at, ap.staff_reply, ap.resolved_at,
 			m.kind as message_kind, m.body as message_body, r.screen_name as reviewer
 			from moderation_appeals ap join users u on u.id = ap.user_id left join staff_messages m on m.id = ap.message_id left join users r on r.id = ap.reviewer_id
 			where ${b.status === "closed" ? sql`ap.status <> 'open'` : sql`ap.status = 'open'`} order by ap.id desc limit 100` }),
@@ -223,14 +223,14 @@ export const toolActions: Record<string, Action> = {
 		role: "moderator",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			const [ap] = await sql`select user_id::text, message_id::text from moderation_appeals where id = ${id}::bigint and status = 'open'`;
+			const [ap] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id, ${sql.cast(sql`message_id`, "text")} as message_id from moderation_appeals where id = ${sql.cast(id, "bigint")} and status = 'open'`;
 			if (!ap) throw new AdminError("No such open appeal.", 404);
 			await guard(a, ap.user_id);
 			if (!["accepted", "rejected"].includes(b.status)) throw new AdminError("Choose an outcome.");
-			await sql`update moderation_appeals set status = ${b.status}, staff_reply = ${textOf(b.reply)}, reviewer_id = ${a.id}::bigint, resolved_at = now() where id = ${id}::bigint`;
+			await sql`update moderation_appeals set status = ${b.status}, staff_reply = ${textOf(b.reply)}, reviewer_id = ${sql.cast(a.id, "bigint")}, resolved_at = now() where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "resolve_appeal", ap.user_id, { appeal: id, status: b.status });
 			if (b.status === "accepted" && ap.message_id) {
-				const revoked = await sql`update staff_messages set revoked_at = now() where id = ${ap.message_id}::bigint and kind = 'strike' and revoked_at is null returning id`;
+				const revoked = await sql`update staff_messages set revoked_at = now() where id = ${sql.cast(ap.message_id, "bigint")} and kind = 'strike' and revoked_at is null returning id`;
 				if (revoked.length) await audit(a, "revoke_strike", ap.user_id, { message: ap.message_id, appeal: id });
 			}
 			return {};
@@ -245,12 +245,12 @@ export const toolActions: Record<string, Action> = {
 			if (id === a.id) throw new AdminError("You can't change your own standing.");
 			const user = await guard(a, id);
 			if (!["restricted", "limited", "suspended"].includes(b.status)) throw new AdminError("Choose a sanction.");
-			const [current] = await sql`select status_until from users where id = ${id}::bigint`;
+			const [current] = await sql`select status_until from users where id = ${sql.cast(id, "bigint")}`;
 			const SEVERITY: Record<string, number> = { active: 0, limited: 1, restricted: 2, suspended: 3 };
 			if (!current.status_until && SEVERITY[user.status] > SEVERITY[b.status]) throw new AdminError(`The account is already ${user.status} until lifted. Reinstate it first.`);
 			const hours = Number(b.hours);
 			if (!Number.isFinite(hours) || hours < 1 || hours > 8760) throw new AdminError("Choose 1–8760 hours.");
-			await sql`update users set status_restore = coalesce(status_restore, status), status = ${b.status}, status_until = now() + ${hours} * interval '1 hour', deactivated_at = null where id = ${id}::bigint`;
+			await sql`update users set status_restore = coalesce(status_restore, status), status = ${b.status}, status_until = now() + ${hours} * ${sql.duration(1, "hour")}, deactivated_at = null where id = ${sql.cast(id, "bigint")}`;
 			if (b.status === "suspended") await shutOut(id);
 			await audit(a, "temporary_status", id, { status: b.status, hours, previous: user.status, reason: String(b.reason ?? "").slice(0, 500) || undefined });
 			return {};
@@ -266,7 +266,7 @@ export const toolActions: Record<string, Action> = {
 				await guard(a, id);
 			}
 			await sql.begin(async (tx) => {
-				await tx`update users set status = ${b.status}, status_until = null, status_restore = null, deactivated_at = null where id = any(${tx.array(ids, "INT8")})`;
+				await tx`update users set status = ${b.status}, status_until = null, status_restore = null, deactivated_at = null where ${tx.contains(tx.array(ids, "INT8"), tx`id`)}`;
 			});
 			if (b.status === "suspended") await shutOut(...ids);
 			await audit(a, "bulk_status", null, { ids, status: b.status });
@@ -280,7 +280,7 @@ export const toolActions: Record<string, Action> = {
 		run: async (a, b) => {
 			const id = idOf(b.id);
 			await guard(a, id);
-			return { changes: await sql`select old_name, new_name, changed_at from username_changes where user_id = ${id}::bigint order by changed_at desc limit 50` };
+			return { changes: await sql`select old_name, new_name, changed_at from username_changes where user_id = ${sql.cast(id, "bigint")} order by changed_at desc limit 50` };
 		},
 	},
 	// signed-in browsers; the token itself never leaves the server
@@ -289,17 +289,17 @@ export const toolActions: Record<string, Action> = {
 		run: async (a, b) => {
 			const id = idOf(b.id);
 			await guard(a, id);
-			return { sessions: await sql`select id::text, created_at, last_seen_at, user_agent, ip, token = ${a.token} as current from sessions where user_id = ${id}::bigint order by last_seen_at desc` };
+			return { sessions: await sql`select ${sql.cast(sql`id`, "text")} as id, created_at, last_seen_at, user_agent, ip, token = ${a.token} as current from sessions where user_id = ${sql.cast(id, "bigint")} order by last_seen_at desc` };
 		},
 	},
 	revokeSession: {
 		role: "support",
 		run: async (a, b) => {
 			if (typeof b.sessionId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(b.sessionId)) throw new AdminError("Invalid session id.");
-			const [s] = await sql`select user_id::text from sessions where id = ${b.sessionId}::uuid`;
+			const [s] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id from sessions where id = ${sql.cast(b.sessionId, "uuid")}`;
 			if (!s) throw new AdminError("No such session.", 404);
 			await guard(a, s.user_id);
-			await sql`delete from sessions where id = ${b.sessionId}::uuid`;
+			await sql`delete from sessions where id = ${sql.cast(b.sessionId, "uuid")}`;
 			await audit(a, "revoke_session", s.user_id, { session: b.sessionId });
 			return {};
 		},
@@ -310,11 +310,11 @@ export const toolActions: Record<string, Action> = {
 		role: "moderator",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			const [p] = await sql`select user_id::text from posts where id = ${id}::bigint`;
+			const [p] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id from posts where id = ${sql.cast(id, "bigint")}`;
 			if (!p) throw new AdminError("No such post.", 404);
 			await guard(a, p.user_id);
 			if (typeof b.hidden !== "boolean" || typeof b.sensitive !== "boolean") throw new AdminError("Provide visibility and sensitivity settings.");
-			await sql`update posts set hidden = ${b.hidden}, sensitive = ${b.sensitive} where id = ${id}::bigint`;
+			await sql`update posts set hidden = ${b.hidden}, sensitive = ${b.sensitive} where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "set_post_visibility", p.user_id, { post: id, hidden: b.hidden, sensitive: b.sensitive });
 			return {};
 		},
@@ -324,7 +324,7 @@ export const toolActions: Record<string, Action> = {
 	blockedNameAccounts: {
 		role: "admin",
 		run: async (a, b) => {
-			const rows = await sql`select id::text, screen_name, name, bio, location, website, role, status from users where status <> 'suspended'`;
+			const rows = await sql`select ${sql.cast(sql`id`, "text")} as id, screen_name, name, bio, location, website, role, status from users where status <> 'suspended'`;
 			const hits = rows.filter((u: any) => blockedNameIn(u.screen_name, u.name) || blockedWordIn(u.bio ?? "", u.location ?? "", u.website ?? ""));
 			if (b.suspend) for (const u of hits) if (!u.role) await suspendForName(u.id, u.screen_name);
 			if (b.suspend) await audit(a, "suspend_blocked_names", null, { count: hits.filter((u: any) => !u.role).length });
@@ -336,7 +336,7 @@ export const toolActions: Record<string, Action> = {
 		role: "moderator",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			const [p] = await sql`select user_id::text from posts where id = ${id}::bigint`;
+			const [p] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id from posts where id = ${sql.cast(id, "bigint")}`;
 			if (!p) throw new AdminError("No such post.", 404);
 			await guard(a, p.user_id);
 			const type = b.type || null;
@@ -345,7 +345,7 @@ export const toolActions: Record<string, Action> = {
 			const url = optionalText(b.url, 500);
 			if (url && !/^https?:\/\/\S+$/.test(url)) throw new AdminError("The link must be an http or https address.");
 			const notice = type ? { type, text: text || NOTICE_TYPES[type as keyof typeof NOTICE_TYPES], ...(url ? { url } : {}) } : null;
-			await sql`update posts set notice = ${notice ? sql`${JSON.stringify(notice)}::text::jsonb` : null} where id = ${id}::bigint`;
+			await sql`update posts set notice = ${notice ? sql.cast(JSON.stringify(notice), "jsonb") : null} where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "set_post_notice", p.user_id, { post: id, notice });
 			return {};
 		},
@@ -355,10 +355,10 @@ export const toolActions: Record<string, Action> = {
 		role: "admin",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			const [p] = await sql`select user_id::text from posts where id = ${id}::bigint`;
+			const [p] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id from posts where id = ${sql.cast(id, "bigint")}`;
 			if (!p) throw new AdminError("No such post.", 404);
 			const counts = countsOf(b.counts, ["likes", "replies", "reposts", "quotes", "bookmarks", "views"]);
-			await sql`update posts set count_overrides = ${counts ? sql`${JSON.stringify(counts)}::text::jsonb` : null} where id = ${id}::bigint`;
+			await sql`update posts set count_overrides = ${counts ? sql.cast(JSON.stringify(counts), "jsonb") : null} where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "set_post_counts", p.user_id, { post: id, counts });
 			return {};
 		},
@@ -369,25 +369,25 @@ export const toolActions: Record<string, Action> = {
 			const id = idOf(b.id);
 			await guard(a, id);
 			const counts = countsOf(b.counts, ["followers", "following"]);
-			await sql`update users set count_overrides = ${counts ? sql`${JSON.stringify(counts)}::text::jsonb` : null} where id = ${id}::bigint`;
+			await sql`update users set count_overrides = ${counts ? sql.cast(JSON.stringify(counts), "jsonb") : null} where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "set_user_counts", id, { counts });
 			return {};
 		},
 	},
-	articles: { role: "support", run: async () => ({ articles: await sql`select a.id::text, a.user_id::text, u.screen_name, a.title, a.state, a.hidden, a.modified_at,
-		(select p.id::text from posts p where p.article_id = a.id order by p.id desc limit 1) as post_id
+	articles: { role: "support", run: async () => ({ articles: await sql`select ${sql.cast(sql`a.id`, "text")} as id, ${sql.cast(sql`a.user_id`, "text")} as user_id, u.screen_name, a.title, a.state, a.hidden, a.modified_at,
+		(select ${sql.cast(sql`p.id`, "text")} as id from posts p where p.article_id = a.id order by p.id desc limit 1) as post_id
 		from articles a join users u on u.id = a.user_id order by a.id desc limit 100` }) },
 	setArticleVisibility: {
 		role: "moderator",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			const [article] = await sql`select user_id::text from articles where id = ${id}::bigint`;
+			const [article] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id from articles where id = ${sql.cast(id, "bigint")}`;
 			if (!article) throw new AdminError("No such article.", 404);
 			await guard(a, article.user_id);
 			if (typeof b.hidden !== "boolean") throw new AdminError("Choose visibility.");
 			await sql.begin(async (tx) => {
-				await tx`update articles set hidden = ${b.hidden} where id = ${id}::bigint`;
-				await tx`update posts set hidden = ${b.hidden} where article_id = ${id}::bigint`;
+				await tx`update articles set hidden = ${b.hidden} where id = ${tx.cast(id, "bigint")}`;
+				await tx`update posts set hidden = ${b.hidden} where article_id = ${tx.cast(id, "bigint")}`;
 			});
 			await audit(a, "article_visibility", article.user_id, { article: id, hidden: b.hidden });
 			return {};
@@ -396,14 +396,14 @@ export const toolActions: Record<string, Action> = {
 
 	media: {
 		role: "support",
-		run: async (_a, b) => ({ media: await sql`select m.id::text, m.user_id::text, u.screen_name, m.kind, m.mime, m.size, m.state, m.created_at, m.post_id::text
+		run: async (_a, b) => ({ media: await sql`select ${sql.cast(sql`m.id`, "text")} as id, ${sql.cast(sql`m.user_id`, "text")} as user_id, u.screen_name, m.kind, m.mime, m.size, m.state, m.created_at, ${sql.cast(sql`m.post_id`, "text")} as post_id
 			from media m join users u on u.id = m.user_id order by m.id desc limit 60 offset ${Math.max(0, Number(b.offset) || 0)}` }),
 	},
 	deleteMedia: {
 		role: "moderator",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			const [m] = await sql`select user_id::text, state from media where id = ${id}::bigint`;
+			const [m] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id, state from media where id = ${sql.cast(id, "bigint")}`;
 			if (!m) throw new AdminError("No such media.", 404);
 			await guard(a, m.user_id);
 			if (m.state === "processing") throw new AdminError("Wait until processing finishes.");
@@ -415,7 +415,7 @@ export const toolActions: Record<string, Action> = {
 				if (parent !== root && !parent.startsWith(root + sep)) throw new AdminError("Invalid media path.");
 				unlinkSync(path);
 			}
-			await sql`delete from media where id = ${id}::bigint`;
+			await sql`delete from media where id = ${sql.cast(id, "bigint")}`;
 			await sql`update users set avatar_url = null where avatar_url = ${`/media/${id}`}`;
 			await sql`update users set banner_url = null where banner_url = ${`/media/banner/${id}`}`;
 			await audit(a, "delete_media", m.user_id, { media: id });
@@ -445,8 +445,8 @@ export const toolActions: Record<string, Action> = {
 		run: async (_a, b) => {
 			const before = b.before ? idOf(b.before, "cursor") : null;
 			const batch = Math.max(100, Math.min(Number(b.batch) || 3000, 10_000));
-			const posts = await sql`select p.id::text, p.text, p.sensitive, u.id::text as user_id, u.screen_name, u.status from posts p join users u on u.id = p.user_id
-				where not p.hidden and u.status <> 'suspended' and u.role is null ${before ? sql`and p.id < ${before}::bigint` : sql``}
+			const posts = await sql`select ${sql.cast(sql`p.id`, "text")} as id, p.text, p.sensitive, ${sql.cast(sql`u.id`, "text")} as user_id, u.screen_name, u.status from posts p join users u on u.id = p.user_id
+				where not p.hidden and u.status <> 'suspended' and u.role is null ${before ? sql`and p.id < ${sql.cast(before, "bigint")}` : sql``}
 				order by p.id desc limit ${batch}`;
 			const hits: Record<string, unknown>[] = [];
 			for (const p of posts) {
@@ -454,7 +454,7 @@ export const toolActions: Record<string, Action> = {
 				if (hit) hits.push({ kind: "post", id: p.id, user_id: p.user_id, screen_name: p.screen_name, status: p.status, sensitive: p.sensitive, text: [...p.text].slice(0, 280).join(""), ...hit });
 			}
 			if (!before) {
-				const people = await sql`select id::text, screen_name, name, bio, location, website, status from users where status <> 'suspended' and role is null order by id desc limit 50000`;
+				const people = await sql`select ${sql.cast(sql`id`, "text")} as id, screen_name, name, bio, location, website, status from users where status <> 'suspended' and role is null order by id desc limit 50000`;
 				for (const u of people) {
 					const hit = hateInName(u.screen_name, u.name) ?? hateIn(u.bio, u.location, u.website);
 					if (hit) hits.push({ kind: "profile", id: u.id, user_id: u.id, screen_name: u.screen_name, status: u.status, text: [u.name, u.bio, u.location].filter(Boolean).join(" · "), ...hit });
@@ -483,7 +483,7 @@ export const toolActions: Record<string, Action> = {
 		run: async (a, b) => {
 			if (typeof b.maintenance !== "boolean" || typeof b.message !== "string" || b.message.length > 500) throw new AdminError("Invalid maintenance settings.");
 			const pin = b.global_pin ? idOf(String(b.global_pin).trim(), "post id") : null;
-			if (pin && !(await sql`select 1 from posts where id = ${pin}::bigint and not hidden`).length) throw new AdminError("Pin an existing visible post.");
+			if (pin && !(await sql`select 1 from posts where id = ${sql.cast(pin, "bigint")} and not hidden`).length) throw new AdminError("Pin an existing visible post.");
 			await setSetting("operations", {
 				maintenance: b.maintenance,
 				message: b.message.trim() || "The instance is undergoing maintenance.",
@@ -521,9 +521,10 @@ export const toolActions: Record<string, Action> = {
 		run: async (a, b, req) => ({
 			security: settings().security,
 			your_ip: req ? clientIp(req) : null,
-			without_2fa: await sql`select id::text, screen_name, role from users where role is not null and not totp_enabled order by screen_name`,
-			sessions: await sql`select s.id::text, s.created_at, s.last_seen_at, s.user_agent, s.ip, s.token = ${a.token} as current,
-				u.id::text as user_id, u.screen_name, u.role
+			without_2fa: await sql`select ${sql.cast(sql`id`, "text")} as id, screen_name, role from users where role is not null and not totp_enabled order by screen_name`,
+			sessions: await sql`select ${sql.cast(sql`s.id`, "text")} as id, s.created_at, s.last_seen_at, s.user_agent, s.ip, s.token = ${a.token} as current,
+				${sql.cast(sql`
+				u.id`, "text")} as user_id, u.screen_name, u.role
 				from sessions s join users u on u.id = s.user_id where u.role is not null order by s.last_seen_at desc limit 200`,
 		}),
 	},
@@ -537,7 +538,7 @@ export const toolActions: Record<string, Action> = {
 			// saving a list that leaves you out would close the panel behind you
 			const ip = req ? clientIp(req) : null;
 			if (ips.length && !ipAllowed(ip, ips)) throw new AdminError(`The list must include your own address (${ip ?? "unknown"}).`);
-			if (b.staff_2fa && !(await sql`select 1 from users where id = ${a.id}::bigint and totp_enabled`).length)
+			if (b.staff_2fa && !(await sql`select 1 from users where id = ${sql.cast(a.id, "bigint")} and totp_enabled`).length)
 				throw new AdminError("Turn on two-factor for your own account first (/account/2fa).");
 			await setSetting("security", { staff_2fa: b.staff_2fa, admin_ips: ips });
 			await audit(a, "save_security", null, { staff_2fa: b.staff_2fa, admin_ips: ips });
@@ -627,9 +628,9 @@ export const toolActions: Record<string, Action> = {
 	errors: {
 		role: "support",
 		run: async (_a, b) => ({
-			errors: await sql`select e.fingerprint, e.source, e.message, e.stack, e.path, e.count, e.first_at, e.last_at, e.resolved, e.user_id::text as user_id, u.screen_name
+			errors: await sql`select e.fingerprint, e.source, e.message, e.stack, e.path, e.count, e.first_at, e.last_at, e.resolved, ${sql.cast(sql`e.user_id`, "text")} as user_id, u.screen_name
 				from error_log e left join users u on u.id = e.user_id
-				where ${b.resolved ? sql`e.resolved` : sql`not e.resolved`} and (${b.source ?? null}::text is null or e.source = ${b.source ?? null})
+				where ${b.resolved ? sql`e.resolved` : sql`not e.resolved`} and (${sql.cast(b.source ?? null, "text")} is null or e.source = ${b.source ?? null})
 				order by e.last_at desc limit 100`,
 		}),
 	},
@@ -653,13 +654,13 @@ export const toolActions: Record<string, Action> = {
 		role: "support",
 		run: async () => ({
 			tree: await sql`with recursive tree as (
-				select u.id, u.screen_name, null::bigint as parent, 0 as depth, ${databaseBackend === "sqlite" ? sql`json_array(cast(u.id as text))` : sql`array[u.id]`} as path from users u
+				select u.id, u.screen_name, ${sql.cast(sql`null`, "bigint")} as parent, 0 as depth, ${sql.singleton(sql`u.id`)} as path from users u
 					where u.invite_code is null or not exists (select 1 from invites i where i.code = u.invite_code and i.created_by is not null)
 				union all
-				select u.id, u.screen_name, t.id, t.depth + 1, ${databaseBackend === "sqlite" ? sql`json_insert(t.path, '$[#]', cast(u.id as text))` : sql`t.path || u.id`} from tree t
+				select u.id, u.screen_name, t.id, t.depth + 1, ${sql.append(sql`t.path`, sql`u.id`)} from tree t
 					join invites i on i.created_by = t.id join users u on u.invite_code = i.code
-					where t.depth < 10 and not u.id = any(t.path)
-			) select id::text, screen_name, parent::text, depth from tree order by path limit 1000`,
+					where t.depth < 10 and not ${sql.contains(sql`t.path`, sql`u.id`)}
+			) select ${sql.cast(sql`id`, "text")} as id, screen_name, ${sql.cast(sql`parent`, "text")} as parent, depth from tree order by path limit 1000`,
 		}),
 	},
 };

@@ -22,7 +22,7 @@ const make = async (p: string, role: string | null) => {
 	const name = `${p}${stamp}`;
 	const id = await createUser(name, name, password);
 	created.push(id);
-	if (role) await sql`update users set role = ${role} where id = ${id}::bigint`;
+	if (role) await sql`update users set role = ${role} where id = ${sql.cast(id, "bigint")}`;
 	return { id, name };
 };
 try {
@@ -42,8 +42,8 @@ try {
 	console.log(`all passed (${checks})`);
 } finally {
 	for (const id of created) {
-		await sql`delete from audit_log where target = ${id} or actor_id = ${id}::bigint`;
-		await sql`delete from users where id = ${id}::bigint`;
+		await sql`delete from audit_log where target = ${id} or actor_id = ${sql.cast(id, "bigint")}`;
+		await sql`delete from users where id = ${sql.cast(id, "bigint")}`;
 	}
 	await sql.end();
 }

@@ -1,3 +1,4 @@
+import type { Fragment } from "./db/query";
 // Search: the query language of X's search box and advanced search form,
 // turned into SQL over posts and users. No index beyond Postgres's own; fine
 // for an instance of friends, the place to add one when that stops being true.
@@ -14,10 +15,10 @@
 //   lang:xx, near:, other operators  accepted and ignored
 
 import { blockedFor, outOfView } from "./blocks";
-import { sql, databaseBackend } from "./db";
+import { sql } from "./db";
 import { settings } from "./settings";
 
-type Clause = ReturnType<typeof sql>;
+type Clause = Fragment;
 
 // passed as a parameter: a backslash inside the SQL template would be lost
 const HASHTAG_RE = "#(\\w+)";
@@ -35,26 +36,26 @@ function term(t: string, viewerId: string): Clause | undefined {
 	const body = neg ? t.slice(1) : t;
 	let c: Clause | undefined;
 	let m: RegExpExecArray | null;
-	if ((m = /^"(.*)"$/.exec(body))) c = m[1] ? sql`p.text ilike ${like(m[1])}` : undefined;
+	if ((m = /^"(.*)"$/.exec(body))) c = m[1] ? sql.like(sql`p.text`, like(m[1]), true) : undefined;
 	else if ((m = /^from:@?(\w{1,15})$/i.exec(body))) c = sql`p.user_id = (select id from users where lower(screen_name) = lower(${m[1]}))`;
 	else if ((m = /^to:@?(\w{1,15})$/i.exec(body)))
 		c = sql`exists (select 1 from posts parent join users pu on pu.id = parent.user_id where parent.id = p.reply_to_id and lower(pu.screen_name) = lower(${m[1]}))`;
 	else if ((m = /^@(\w{1,15})$/.exec(body)))
 		c = sql`exists (select 1 from post_mentions pm join users mu on mu.id = pm.user_id where pm.post_id = p.id and lower(mu.screen_name) = lower(${m[1]}))`;
-	else if ((m = /^quoted_tweet_id:(\d{1,19})$/.exec(body))) c = sql`p.quote_id = ${m[1]}::bigint`;
-	else if ((m = /^#(\w+)$/.exec(body))) c = sql`p.text ~* ${tagPattern(m[1])}`;
+	else if ((m = /^quoted_tweet_id:(\d{1,19})$/.exec(body))) c = sql`p.quote_id = ${sql.cast(m[1], "bigint")}`;
+	else if ((m = /^#(\w+)$/.exec(body))) c = sql.regex(sql`p.text`, tagPattern(m[1]), true);
 	else if ((m = /^filter:(\w+)$/i.exec(body))) {
 		const f = m[1].toLowerCase();
 		if (f === "media") c = sql`exists (select 1 from media fm where fm.post_id = p.id)`;
 		else if (f === "images") c = sql`exists (select 1 from media fm where fm.post_id = p.id and fm.kind <> 'video')`;
 		else if (f === "videos" || f === "native_video") c = sql`exists (select 1 from media fm where fm.post_id = p.id and fm.kind = 'video')`;
 		else if (f === "replies") c = sql`p.reply_to_id is not null`;
-		else if (f === "links") c = sql`p.text ~* 'https?://'`;
+		else if (f === "links") c = sql.regex(sql`p.text`, sql`'https?://'`, true);
 		else if (f === "quote") c = sql`p.quote_id is not null`;
 		// "People you follow" in the search filters
-		else if (f === "follows") c = sql`p.user_id in (select followee_id from follows where follower_id = ${viewerId}::bigint)`;
-	} else if ((m = /^since:(\d{4}-\d{2}-\d{2})$/.exec(body))) c = sql`p.created_at >= ${m[1]}::date`;
-	else if ((m = /^until:(\d{4}-\d{2}-\d{2})$/.exec(body))) c = sql`p.created_at < ${m[1]}::date`;
+		else if (f === "follows") c = sql`p.user_id in (select followee_id from follows where follower_id = ${sql.cast(viewerId, "bigint")})`;
+	} else if ((m = /^since:(\d{4}-\d{2}-\d{2})$/.exec(body))) c = sql`p.created_at >= ${sql.cast(m[1], "date")}`;
+	else if ((m = /^until:(\d{4}-\d{2}-\d{2})$/.exec(body))) c = sql`p.created_at < ${sql.cast(m[1], "date")}`;
 	else if ((m = /^min_(faves|retweets|replies):(\d{1,9})$/i.exec(body))) {
 		const n = Number(m[2]);
 		const kind = m[1].toLowerCase();
@@ -67,7 +68,7 @@ function term(t: string, viewerId: string): Clause | undefined {
 	}
 	// operators this server does not know (lang:, near:, within:, ...) are left out, not searched as text
 	else if (/^(?!https?:)\w+:\S/i.test(body)) return undefined;
-	else c = sql`p.text ilike ${like(body)}`;
+	else c = sql.like(sql`p.text`, like(body), true);
 	return c && neg ? sql`not (${c})` : c;
 }
 
@@ -103,7 +104,7 @@ export async function searchPosts(
 	// "Visibility limited" posts (staff's Fosnr label) don't come up in search
 	// suspended accounts' posts stay out of search for staff too
 	const hidden = sql`and p.user_id not in ${blockedFor(opts.viewerId)} and p.user_id not in ${outOfView(opts.viewerId)}
-		and p.user_id not in (select id from users where status = 'suspended') and p.notice->>'type' is distinct from 'Fosnr'`;
+		and p.user_id not in (select id from users where status = 'suspended') and not ${sql.equal(sql.jsonGet(sql`p.notice`, sql`'type'`, true), sql`'Fosnr'`)}`;
 	if (opts.top) {
 		const rows = await sql`select p.id from (select p.id from posts p where ${cond} ${media} ${hidden} order by p.id desc limit ${TOP_POOL}) p
 			order by ((select count(*) from likes x where x.post_id = p.id) + 2 * (select count(*) from reposts x where x.post_id = p.id)
@@ -112,7 +113,7 @@ export async function searchPosts(
 		return rows.map((r: any) => String(r.id));
 	}
 	const rows = await sql`select p.id from posts p where ${cond} ${media} ${hidden}
-		${opts.before ? sql`and p.id < ${opts.before}::bigint` : sql``} order by p.id desc limit ${opts.limit}`;
+		${opts.before ? sql`and p.id < ${sql.cast(opts.before, "bigint")}` : sql``} order by p.id desc limit ${opts.limit}`;
 	return rows.map((r: any) => String(r.id));
 }
 
@@ -124,12 +125,12 @@ export async function searchUsers(viewerId: string, query: string, limit: number
 		.filter((t) => !t.startsWith("-") && !t.includes(":"))
 		.map((t) => t.replace(/^"|"$/g, "").replace(/^@/, ""));
 	if (!words.length) return [];
-	const each = words.map((w) => sql`(u.screen_name ilike ${like(w)} or u.name ilike ${like(w)} or u.bio ilike ${like(w)})`);
+	const each = words.map((w) => sql`(${sql.like(sql`u.screen_name`, like(w), true)} or ${sql.like(sql`u.name`, like(w), true)} or ${sql.like(sql`u.bio`, like(w), true)})`);
 	const cond = each.reduce((acc, c) => sql`${acc} and ${c}`);
 	const first = words[0];
 	const rows = await sql`select u.id from users u where ${cond}
 			and u.status <> 'suspended' and u.id not in ${outOfView(viewerId)} and u.id not in ${blockedFor(viewerId)}
-		order by (lower(u.screen_name) = lower(${first})) desc, (u.screen_name ilike ${`${first.replace(/[\\%_]/g, "")}%`}) desc,
+		order by (lower(u.screen_name) = lower(${first})) desc, (${sql.like(sql`u.screen_name`, `${first.replace(/[\\%_]/g, "")}%`, true)}) desc,
 			(select count(*) from follows f where f.followee_id = u.id) desc, u.id
 		limit ${limit} offset ${offset}`;
 	return rows.map((r: any) => String(r.id));
@@ -140,9 +141,9 @@ export async function hashtagsLike(prefix: string, limit: number): Promise<strin
 	const clean = prefix.replace(/^#/, "").replace(/[^\w]/g, "");
 	if (!clean) return [];
 	const rows = await sql`select tag, count(*) as n from (
-			select ${databaseBackend === "sqlite" ? sql`lower(matches.value)` : sql`lower((regexp_matches(p.text, ${HASHTAG_RE}, 'g'))[1])`} as tag from posts p ${databaseBackend === "sqlite" ? sql`, json_each(regexp_matches_json(p.text, ${HASHTAG_RE})) matches` : sql``} where p.text ilike ${like(`#${clean}`)} and not p.hidden and p.user_id not in ${outOfView("0")}
+			select lower(matches.value) as tag from posts p cross join ${sql.regexMatches(sql`p.text`, HASHTAG_RE)} matches where ${sql.like(sql`p.text`, like(`#${clean}`), true)} and not p.hidden and p.user_id not in ${outOfView("0")}
 			order by p.id desc limit 2000) t
-		where tag like ${`${clean.toLowerCase()}%`} group by tag order by n desc, tag limit ${limit}`;
+		where ${sql.like(sql`tag`, `${clean.toLowerCase()}%`, false)} group by tag order by n desc, tag limit ${limit}`;
 	return rows.map((r: any) => `#${r.tag}`);
 }
 
@@ -173,14 +174,14 @@ export async function cachedTrends(days: number, limit: number, scope: TrendScop
 }
 
 async function queryTrends(days: number, limit: number, scope: TrendScope) {
-	return await sql`select tag, sum(posts)::int as n, sum(w)::int as score from (
+	return await sql`select tag, ${sql.cast(sql`sum(posts)`, "int")} as n, ${sql.cast(sql`sum(w)`, "int")} as score from (
 			select tag, who, count(distinct id) as posts, max(w) as w from (
-				select p.id, ${databaseBackend === "sqlite" ? sql`lower(matches.value)` : sql`lower((regexp_matches(p.text, ${HASHTAG_RE}, 'g'))[1])`} as tag,
-					coalesce((select e.ip from login_events e where e.user_id = p.user_id and e.ip is not null order by e.created_at desc limit 1), p.user_id::text) as who,
-					${scope.followedBy ? sql`case when p.user_id in (select followee_id from follows where follower_id = ${scope.followedBy}::bigint) then 2 else 1 end` : sql`1`} as w
-				from posts p join users u on u.id = p.user_id ${databaseBackend === "sqlite" ? sql`, json_each(regexp_matches_json(p.text, ${HASHTAG_RE})) matches` : sql``}
-				where p.created_at > now() - make_interval(days => ${days}) and not p.hidden and p.user_id not in ${outOfView("0")}
-					and u.status = 'active' and u.created_at <= now() - make_interval(days => ${settings().operations.trend_min_account_days})
+				select p.id, lower(matches.value) as tag,
+					coalesce((select e.ip from login_events e where e.user_id = p.user_id and e.ip is not null order by e.created_at desc limit 1), ${sql.cast(sql`p.user_id`, "text")}) as who,
+					${scope.followedBy ? sql`case when p.user_id in (select followee_id from follows where follower_id = ${sql.cast(scope.followedBy, "bigint")}) then 2 else 1 end` : sql`1`} as w
+				from posts p join users u on u.id = p.user_id cross join ${sql.regexMatches(sql`p.text`, HASHTAG_RE)} matches
+				where p.created_at > now() - ${sql.duration(days, "day")} and not p.hidden and p.user_id not in ${outOfView("0")}
+					and u.status = 'active' and u.created_at <= now() - ${sql.duration(settings().operations.trend_min_account_days, "day")}
 					${scope.country ? sql`and u.country = ${scope.country}` : sql``}) t
 			group by tag, who) people
 		group by tag having count(*) >= ${settings().operations.trend_min_people} order by score desc, n desc, tag limit ${limit + 50}`;

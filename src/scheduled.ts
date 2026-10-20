@@ -53,10 +53,10 @@ function executeAt(vars: Vars): Date {
 }
 
 async function check(userId: string, request: Vars, kind: "scheduled" | "draft") {
-	const [n] = await sql`select count(*)::int as n from scheduled_posts where user_id = ${userId}::bigint and kind = ${kind}`;
+	const [n] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from scheduled_posts where user_id = ${sql.cast(userId, "bigint")} and kind = ${kind}`;
 	if (n.n >= MAX_PENDING) throw new PostError(`You can keep up to ${MAX_PENDING} ${kind === "draft" ? "drafts" : "scheduled posts"}.`, 214);
 	if (kind === "scheduled" && !request.status.trim() && !request.media_ids.length) throw new PostError("Your post is empty.", 170);
-	const [author] = await sql`select status from users where id = ${userId}::bigint`;
+	const [author] = await sql`select status from users where id = ${sql.cast(userId, "bigint")}`;
 	if (author?.status !== "active" && author?.status !== "limited") throw new PostError("Your account can't post right now.", 326);
 	await checkLength(userId, request.status);
 	await refuseHate(userId, request.status);
@@ -67,7 +67,7 @@ async function create(v: Viewer, vars: Vars, kind: "scheduled" | "draft") {
 	const at = kind === "scheduled" ? executeAt(vars) : null;
 	await check(v.id, request, kind);
 	const id = newId();
-	await sql`insert into scheduled_posts (id, user_id, kind, execute_at, request) values (${id}::bigint, ${v.id}::bigint, ${kind}, ${at}, ${JSON.stringify(request)}::text::jsonb)`;
+	await sql`insert into scheduled_posts (id, user_id, kind, execute_at, request) values (${sql.cast(id, "bigint")}, ${sql.cast(v.id, "bigint")}, ${kind}, ${at}, ${sql.cast(JSON.stringify(request), "jsonb")})`;
 	return { data: { tweet: { rest_id: id } } };
 }
 
@@ -77,20 +77,20 @@ async function edit(v: Viewer, vars: Vars, kind: "scheduled" | "draft") {
 	const request = cleanRequest(vars.post_tweet_request);
 	const at = kind === "scheduled" ? executeAt(vars) : null;
 	await checkLength(v.id, request.status);
-	const rows = await sql`update scheduled_posts set request = ${JSON.stringify(request)}::text::jsonb, execute_at = ${at}
-		where id = ${id}::bigint and user_id = ${v.id}::bigint and kind = ${kind} returning id`;
+	const rows = await sql`update scheduled_posts set request = ${sql.cast(JSON.stringify(request), "jsonb")}, execute_at = ${at}
+		where id = ${sql.cast(id, "bigint")} and user_id = ${sql.cast(v.id, "bigint")} and kind = ${kind} returning id`;
 	if (!rows.length) throw new PostError("Not found.", 144);
 	return { data: { tweet: { rest_id: id } } };
 }
 
 async function remove(v: Viewer, idsToDelete: unknown[], kind: "scheduled" | "draft") {
 	const list = idsToDelete.filter(isId);
-	if (list.length) await sql`delete from scheduled_posts where user_id = ${v.id}::bigint and kind = ${kind} and id = any(${sql.array(list, "INT8")})`;
+	if (list.length) await sql`delete from scheduled_posts where user_id = ${sql.cast(v.id, "bigint")} and kind = ${kind} and ${sql.contains(sql.array(list, "INT8"), sql`id`)}`;
 	return { data: { scheduledtweet_delete: "Done" } };
 }
 
 async function list(v: Viewer, kind: "scheduled" | "draft") {
-	const rows = await sql`select id::text, kind, execute_at, request from scheduled_posts where user_id = ${v.id}::bigint and kind = ${kind}
+	const rows = await sql`select ${sql.cast(sql`id`, "text")} as id, kind, execute_at, request from scheduled_posts where user_id = ${sql.cast(v.id, "bigint")} and kind = ${kind}
 		order by ${kind === "scheduled" ? sql`execute_at asc` : sql`created_at desc`} limit 100`;
 	return rows.map(item);
 }
@@ -110,8 +110,8 @@ export const scheduledHandlers = {
 // posts whose time has come; a failure drops the entry so it can't loop
 export async function runDue(): Promise<number> {
 	const due = await sql`delete from scheduled_posts where id in (
-			select id from scheduled_posts where kind = 'scheduled' and execute_at <= now() order by execute_at limit 20 for update skip locked)
-		returning user_id::text, request`;
+			select id from scheduled_posts where kind = 'scheduled' and execute_at <= now() order by execute_at limit 20 ${sql.lock(true)})
+		returning ${sql.cast(sql`user_id`, "text")} as user_id, request`;
 	for (const row of due) {
 		const r = row.request as Vars;
 		try {

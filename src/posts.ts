@@ -1,5 +1,5 @@
 import type { User } from "./auth";
-import { sql, databaseBackend } from "./db";
+import { sql } from "./db";
 import { newId } from "./ids";
 import { hateIn } from "./hate";
 import { automodStrike } from "./moderation";
@@ -25,31 +25,31 @@ const SUSPENDED = sql`(select id from users where status = 'suspended')`;
 
 // every post query starts from this; callers append where/order/limit
 const select = (viewerId: string) => sql`
-	select p.id, p.text, p.reply_to_id, p.conversation_id, p.quote_id, p.article_id, p.created_at, p.source, p.sensitive, p.community_id::text as community_id, p.poll_id::text as poll_id, p.place_id, p.edit_count, p.edited_at, p.reply_policy,
-		exists (select 1 from posts r where r.id = p.conversation_id and r.reply_policy is not null and r.user_id <> ${viewerId}::bigint and not (
-			(r.reply_policy = 'Community' and exists (select 1 from follows f where f.follower_id = r.user_id and f.followee_id = ${viewerId}::bigint))
-			or (r.reply_policy = 'ByInvitation' and exists (select 1 from post_mentions m where m.post_id = r.id and m.user_id = ${viewerId}::bigint))
-			or (r.reply_policy = 'Verified' and exists (select 1 from users x where x.id = ${viewerId}::bigint and (x.verified_type is not null or exists (select 1 from affiliations af where af.user_id = x.id))))
+	select p.id, p.text, p.reply_to_id, p.conversation_id, p.quote_id, p.article_id, p.created_at, p.source, p.sensitive, ${sql.cast(sql`p.community_id`, "text")} as community_id, ${sql.cast(sql`p.poll_id`, "text")} as poll_id, p.place_id, p.edit_count, p.edited_at, p.reply_policy,
+		exists (select 1 from posts r where r.id = p.conversation_id and r.reply_policy is not null and r.user_id <> ${sql.cast(viewerId, "bigint")} and not (
+			(r.reply_policy = 'Community' and exists (select 1 from follows f where f.follower_id = r.user_id and f.followee_id = ${sql.cast(viewerId, "bigint")}))
+			or (r.reply_policy = 'ByInvitation' and exists (select 1 from post_mentions m where m.post_id = r.id and m.user_id = ${sql.cast(viewerId, "bigint")}))
+			or (r.reply_policy = 'Verified' and exists (select 1 from users x where x.id = ${sql.cast(viewerId, "bigint")} and (x.verified_type is not null or exists (select 1 from affiliations af where af.user_id = x.id))))
 		)) as reply_limited,
 		(select cr.reply_policy from posts cr where cr.id = p.conversation_id) as conversation_policy,
 		(select cu.screen_name from posts cr join users cu on cu.id = cr.user_id where cr.id = p.conversation_id) as conversation_owner,
 		ru.id as reply_user_id, ru.screen_name as reply_screen_name,
 		${userCols(viewerId)},
 		-- staff can set the shown counts (admin panel); the lists behind them stay real
-		coalesce((p.count_overrides->>'likes')::int, (select count(*)::int from likes x where x.post_id = p.id and x.user_id not in ${SUSPENDED})) as like_count,
-		coalesce((p.count_overrides->>'reposts')::int, (select count(*)::int from reposts x where x.post_id = p.id and x.user_id not in ${SUSPENDED})) as repost_count,
-		coalesce((p.count_overrides->>'bookmarks')::int, (select count(*)::int from bookmarks x where x.post_id = p.id)) as bookmark_count,
-		coalesce((p.count_overrides->>'replies')::int, (select count(*)::int from posts x where x.reply_to_id = p.id and x.user_id not in ${SUSPENDED})) as reply_count,
-		coalesce((p.count_overrides->>'quotes')::int, (select count(*)::int from posts x where x.quote_id = p.id and x.user_id not in ${SUSPENDED})) as quote_count,
-		coalesce((p.count_overrides->>'views')::int, (select count(*)::int from post_views x where x.post_id = p.id)) as view_count,
+		coalesce(${sql.cast(sql`(${sql.jsonGet(sql`p.count_overrides`, sql`'likes'`, true)})`, "int")}, (select ${sql.cast(sql`count(*)`, "int")} from likes x where x.post_id = p.id and x.user_id not in ${SUSPENDED})) as like_count,
+		coalesce(${sql.cast(sql`(${sql.jsonGet(sql`p.count_overrides`, sql`'reposts'`, true)})`, "int")}, (select ${sql.cast(sql`count(*)`, "int")} from reposts x where x.post_id = p.id and x.user_id not in ${SUSPENDED})) as repost_count,
+		coalesce(${sql.cast(sql`(${sql.jsonGet(sql`p.count_overrides`, sql`'bookmarks'`, true)})`, "int")}, (select ${sql.cast(sql`count(*)`, "int")} from bookmarks x where x.post_id = p.id)) as bookmark_count,
+		coalesce(${sql.cast(sql`(${sql.jsonGet(sql`p.count_overrides`, sql`'replies'`, true)})`, "int")}, (select ${sql.cast(sql`count(*)`, "int")} from posts x where x.reply_to_id = p.id and x.user_id not in ${SUSPENDED})) as reply_count,
+		coalesce(${sql.cast(sql`(${sql.jsonGet(sql`p.count_overrides`, sql`'quotes'`, true)})`, "int")}, (select ${sql.cast(sql`count(*)`, "int")} from posts x where x.quote_id = p.id and x.user_id not in ${SUSPENDED})) as quote_count,
+		coalesce(${sql.cast(sql`(${sql.jsonGet(sql`p.count_overrides`, sql`'views'`, true)})`, "int")}, (select ${sql.cast(sql`count(*)`, "int")} from post_views x where x.post_id = p.id)) as view_count,
 		p.notice,
-		exists (select 1 from likes x where x.post_id = p.id and x.user_id = ${viewerId}::bigint) as liked,
-		exists (select 1 from reposts x where x.post_id = p.id and x.user_id = ${viewerId}::bigint) as reposted,
-		exists (select 1 from bookmarks x where x.post_id = p.id and x.user_id = ${viewerId}::bigint) as bookmarked
+		exists (select 1 from likes x where x.post_id = p.id and x.user_id = ${sql.cast(viewerId, "bigint")}) as liked,
+		exists (select 1 from reposts x where x.post_id = p.id and x.user_id = ${sql.cast(viewerId, "bigint")}) as reposted,
+		exists (select 1 from bookmarks x where x.post_id = p.id and x.user_id = ${sql.cast(viewerId, "bigint")}) as bookmarked
 	from posts p
 	join users u on u.id = p.user_id and (not p.hidden or ${staffViewer(viewerId)})
 		and u.id not in ${protectedFor(viewerId)} and u.id not in ${suspendedFor(viewerId)}
-		and u.id not in (select blocker_id from blocks where blocked_id = ${viewerId}::bigint)
+		and u.id not in (select blocker_id from blocks where blocked_id = ${sql.cast(viewerId, "bigint")})
 	left join posts rp on rp.id = p.reply_to_id
 	left join users ru on ru.id = coalesce(rp.user_id, p.reply_to_user_id)`;
 
@@ -94,13 +94,13 @@ async function hydrate(viewerId: string, posts: PostRow[], quotes = true): Promi
 	const media = await mediaForPosts(posts.map((p) => p.id));
 	for (const p of posts) p.media = media.get(p.id) ?? [];
 	if (posts.length) {
-		const notes = await sql`select n.id::text, n.post_id::text, n.text from community_notes n join users author on author.id = n.author_id and author.status <> 'suspended'
+		const notes = await sql`select ${sql.cast(sql`n.id`, "text")} as id, ${sql.cast(sql`n.post_id`, "text")} as post_id, n.text from community_notes n join users author on author.id = n.author_id and author.status <> 'suspended'
 			join community_note_ratings r on r.note_id = n.id join users voter on voter.id = r.user_id and voter.status = 'active'
-			where n.post_id = any(${sql.array(posts.map(p => p.id), "INT8")}) and n.classification = 'Misleading' and n.author_id not in ${blockedFor(viewerId)}
+			where ${sql.contains(sql.array(posts.map(p => p.id), "INT8"), sql`n.post_id`)} and n.classification = 'Misleading' and n.author_id not in ${blockedFor(viewerId)}
 			group by n.id having count(*) >= 3 and count(*) filter(where r.rating = 'Helpful') * 3 >= count(*) * 2 order by n.id desc`;
 		for (const p of posts) { const note = notes.find((n: any) => n.post_id === p.id); if (note) p.communityNote = { id: note.id, text: note.text }; }
 		const mentions = await sql`select m.post_id, u.id, u.screen_name, u.name from post_mentions m join users u on u.id = m.user_id
-			where m.post_id = any(${sql.array(posts.map((p) => p.id), "INT8")})`;
+			where ${sql.contains(sql.array(posts.map((p) => p.id), "INT8"), sql`m.post_id`)}`;
 		for (const p of posts) p.mentions = mentions.filter((m: any) => String(m.post_id) === p.id).map((m: any) => ({ id: String(m.id), screen_name: m.screen_name, name: m.name }));
 	}
 	const pollIds = [...new Set(posts.map((p) => p.poll_id).filter((id): id is string => !!id))];
@@ -119,7 +119,7 @@ async function hydrate(viewerId: string, posts: PostRow[], quotes = true): Promi
 	}
 	const editedIds = posts.filter((p) => p.edit_count).map((p) => p.id);
 	if (editedIds.length) {
-		const versions = await sql`select post_id::text, version_id::text from post_versions where post_id = any(${sql.array(editedIds, "INT8")}) order by seq`;
+		const versions = await sql`select ${sql.cast(sql`post_id`, "text")} as post_id, ${sql.cast(sql`version_id`, "text")} as version_id from post_versions where ${sql.contains(sql.array(editedIds, "INT8"), sql`post_id`)} order by seq`;
 		for (const p of posts) if (p.edit_count) p.versionIds = versions.filter((v: any) => v.post_id === p.id).map((v: any) => v.version_id);
 	}
 	const communityIds = [...new Set(posts.map((p) => p.community_id).filter((id): id is string => !!id))];
@@ -139,18 +139,16 @@ async function hydrate(viewerId: string, posts: PostRow[], quotes = true): Promi
 
 export async function postsByIds(viewerId: string, ids: string[], quotes = true): Promise<Map<string, PostRow>> {
 	if (!ids.length) return new Map();
-	const rows = await sql`${select(viewerId)} where p.id = any(${sql.array(ids, "INT8")})`;
+	const rows = await sql`${select(viewerId)} where ${sql.contains(sql.array(ids, "INT8"), sql`p.id`)}`;
 	const posts = await hydrate(viewerId, rows.map(toRow), quotes);
 	// being shown a post counts once per viewer; nobody waits for it
 	const seen = posts.filter((p) => p.author.id !== viewerId).map((p) => p.id);
 	if (seen.length)
-		void (databaseBackend === "sqlite"
-			? sql`insert into post_views (post_id, user_id) select cast(value as integer), ${viewerId}::bigint from json_each(${sql.array(seen, "INT8")}) where true on conflict do nothing`
-			: sql`insert into post_views (post_id, user_id) select x, ${viewerId}::bigint from unnest(${sql.array(seen, "INT8")}::bigint[]) x on conflict do nothing`).catch(() => {});
+		void sql`insert into post_views (post_id, user_id) select cast(value as bigint), ${sql.cast(viewerId, "bigint")} from ${sql.each(sql.array(seen, "INT8"))} x where true on conflict do nothing`.catch(() => {});
 	const out = new Map(posts.map((p) => [p.id, p]));
 	const unknown = ids.filter((id) => !out.has(id));
 	if (unknown.length) {
-		const versions = await sql`select version_id::text, post_id::text, text, created_at from post_versions where version_id = any(${sql.array(unknown, "INT8")})`;
+		const versions = await sql`select ${sql.cast(sql`version_id`, "text")} as version_id, ${sql.cast(sql`post_id`, "text")} as post_id, text, created_at from post_versions where ${sql.contains(sql.array(unknown, "INT8"), sql`version_id`)}`;
 		const current = await postsByIds(viewerId, [...new Set(versions.map((v: any) => v.post_id as string))] as string[], quotes);
 		for (const v of versions) {
 			const base = current.get(v.post_id);
@@ -167,7 +165,7 @@ const MAX_EDITS = 5;
 // id and what it said before goes to post_versions.
 // the author's limit goes by their badge (textlen.ts, Admin > Settings)
 export async function checkLength(userId: string, text: string) {
-	const [u] = await sql`select verified_type from users where id = ${userId}::bigint`;
+	const [u] = await sql`select verified_type from users where id = ${sql.cast(userId, "bigint")}`;
 	const limit = postLimitFor(u?.verified_type);
 	if (weightedLength(text) > limit) throw new PostError(`Posts are limited to ${limit.toLocaleString("en-US")} characters.`, 186);
 }
@@ -185,9 +183,9 @@ export async function editPost(userId: string, postId: string, text: string): Pr
 	await refuseHate(userId, text);
 	if (hasBlockedPhrase(text)) throw new PostError("Your post contains a phrase this instance doesn't allow.", 186);
 	if (!text.trim()) throw new PostError("Your post is empty.", 170);
-	const [post] = await sql`select p.id::text, p.text, p.created_at, p.edit_count, p.edited_at, u.status,
+	const [post] = await sql`select ${sql.cast(sql`p.id`, "text")} as id, p.text, p.created_at, p.edit_count, p.edited_at, u.status,
 			exists (select 1 from users x where x.id = p.user_id and x.pinned_post_id = p.id) as pinned
-		from posts p join users u on u.id = p.user_id where p.id = ${postId}::bigint and p.user_id = ${userId}::bigint`;
+		from posts p join users u on u.id = p.user_id where p.id = ${sql.cast(postId, "bigint")} and p.user_id = ${sql.cast(userId, "bigint")}`;
 	if (!post) throw new PostError("You can only edit your own posts.", 144);
 	if (post.status !== "active") throw new PostError("Your account can't edit posts right now.", 326);
 	if (post.pinned) throw new PostError("Unpin this post before editing it.", 214);
@@ -195,13 +193,13 @@ export async function editPost(userId: string, postId: string, text: string): Pr
 	if (post.edit_count >= MAX_EDITS) throw new PostError("This post has reached its edit limit.", 214);
 	if (text === post.text) throw new PostError("There's nothing new to save.", 214);
 	await sql`insert into post_versions (version_id, post_id, seq, text, created_at)
-		values (${newId()}::bigint, ${postId}::bigint, ${post.edit_count}, ${post.text}, ${post.edited_at ?? post.created_at})`;
-	await sql`update posts set text = ${text}, edit_count = edit_count + 1, edited_at = now() where id = ${postId}::bigint`;
-	await sql`delete from post_mentions where post_id = ${postId}::bigint`;
+		values (${sql.cast(newId(), "bigint")}, ${sql.cast(postId, "bigint")}, ${post.edit_count}, ${post.text}, ${post.edited_at ?? post.created_at})`;
+	await sql`update posts set text = ${text}, edit_count = edit_count + 1, edited_at = now() where id = ${sql.cast(postId, "bigint")}`;
+	await sql`delete from post_mentions where post_id = ${sql.cast(postId, "bigint")}`;
 	const names = [...new Set([...text.matchAll(MENTION)].map((m) => m[1].toLowerCase()))].slice(0, 20);
 	if (names.length)
 		await sql`insert into post_mentions (post_id, user_id)
-			select ${postId}::bigint, u.id from users u where lower(u.screen_name) = any(${sql.array(names, "TEXT")}) on conflict do nothing`;
+			select ${sql.cast(postId, "bigint")}, u.id from users u where ${sql.contains(sql.array(names, "TEXT"), sql`lower(u.screen_name)`)} on conflict do nothing`;
 }
 
 export async function getPost(viewerId: string, id: string): Promise<PostRow | undefined> {
@@ -215,7 +213,7 @@ export async function getPost(viewerId: string, id: string): Promise<PostRow | u
 // open); X takes it as the post that was reposted. Ids never collide: posts
 // and reposts draw from the same generator.
 export async function originalPostId(id: string): Promise<string> {
-	const [r] = await sql`select post_id::text from reposts where id = ${id}::bigint`;
+	const [r] = await sql`select ${sql.cast(sql`post_id`, "text")} as post_id from reposts where id = ${sql.cast(id, "bigint")}`;
 	return r?.post_id ?? id;
 }
 
@@ -250,14 +248,14 @@ export const homeHidden = (viewerId: string) => sql`f.author_id not in ${blocked
 	and f.author_id not in ${protectedFor(viewerId)} and ${originalAuthor()} not in ${protectedFor(viewerId)}
 	and f.author_id not in ${mutedFor(viewerId)} and ${originalAuthor()} not in ${mutedFor(viewerId)}
 	and not ${hasMutedWord(viewerId, "home_timeline", sql`f.post_id`)}
-	and (f.reposter_id is null or f.reposter_id not in (select target_id from repost_mutes where user_id = ${viewerId}::bigint))`;
+	and (f.reposter_id is null or f.reposter_id not in (select target_id from repost_mutes where user_id = ${sql.cast(viewerId, "bigint")}))`;
 // posts of a community show outside it only to its members (f is feed_items)
 export const communityVisible = (viewerId: string) => sql`((select x.community_id from posts x where x.id = f.post_id) is null
-	or (select x.community_id from posts x where x.id = f.post_id) in (select community_id from community_members where user_id = ${viewerId}::bigint))`;
+	or (select x.community_id from posts x where x.id = f.post_id) in (select community_id from community_members where user_id = ${sql.cast(viewerId, "bigint")}))`;
 
 // a muted list keeps its members out of the home feeds, not out of the list itself
-const listMuted = (viewerId: string) => sql`f.author_id not in (select m.user_id from list_mutes x join list_members m on m.list_id = x.list_id where x.user_id = ${viewerId}::bigint)`;
-const blockedBy = (viewerId: string) => sql`(select blocker_id from blocks where blocked_id = ${viewerId}::bigint)`;
+const listMuted = (viewerId: string) => sql`f.author_id not in (select m.user_id from list_mutes x join list_members m on m.list_id = x.list_id where x.user_id = ${sql.cast(viewerId, "bigint")})`;
+const blockedBy = (viewerId: string) => sql`(select blocker_id from blocks where blocked_id = ${sql.cast(viewerId, "bigint")})`;
 const profileHidden = (viewerId: string) => sql`f.author_id not in ${blockedBy(viewerId)} and ${originalAuthor()} not in ${blockedBy(viewerId)}
 	and f.author_id not in ${suspendedFor(viewerId)} and ${originalAuthor()} not in ${suspendedFor(viewerId)}
 	and f.author_id not in ${protectedFor(viewerId)} and ${originalAuthor()} not in ${protectedFor(viewerId)}`;
@@ -265,13 +263,13 @@ const profileHidden = (viewerId: string) => sql`f.author_id not in ${blockedBy(v
 export async function feed(q: FeedQuery): Promise<FeedItem[]> {
 	const authorFilter =
 		"user" in q.authors
-			? sql`f.author_id = ${q.authors.user}::bigint`
+			? sql`f.author_id = ${sql.cast(q.authors.user, "bigint")}`
 			: "community" in q.authors
-				? sql`(f.reposter_id is null and f.post_id in (select id from posts where community_id = ${q.authors.community}::bigint))`
+				? sql`(f.reposter_id is null and f.post_id in (select id from posts where community_id = ${sql.cast(q.authors.community, "bigint")}))`
 			: "list" in q.authors
-				? sql`f.author_id in (select user_id from list_members where list_id = ${q.authors.list}::bigint)`
+				? sql`f.author_id in (select user_id from list_members where list_id = ${sql.cast(q.authors.list, "bigint")})`
 				: "following" in q.authors
-					? sql`(f.author_id = ${q.viewerId}::bigint or f.author_id in (select followee_id from follows where follower_id = ${q.viewerId}::bigint))`
+					? sql`(f.author_id = ${sql.cast(q.viewerId, "bigint")} or f.author_id in (select followee_id from follows where follower_id = ${sql.cast(q.viewerId, "bigint")}))`
 					: sql`true`;
 	const kindFilter = q.kinds === "posts" ? sql`f.reposter_id is null` : q.kinds === "reposts" ? sql`f.reposter_id is not null` : sql`true`;
 	const replyFilter = q.onlyReplies ? sql`f.is_reply` : q.replies ? sql`true` : sql`not f.is_reply`;
@@ -288,9 +286,9 @@ export async function feed(q: FeedQuery): Promise<FeedItem[]> {
 	const home = !("user" in q.authors);
 	const hidden = home ? ("list" in q.authors || "community" in q.authors ? homeHidden(q.viewerId) : sql`${homeHidden(q.viewerId)} and ${listMuted(q.viewerId)}`) : profileHidden(q.viewerId);
 	const rows = q.after
-		? await sql`select * from feed_items f where ${authorFilter} and ${kindFilter} and ${replyFilter} and ${mediaFilter} and ${articleFilter} and ${communityFilter} and ${hidden} and f.item_id > ${q.after}::bigint
+		? await sql`select * from feed_items f where ${authorFilter} and ${kindFilter} and ${replyFilter} and ${mediaFilter} and ${articleFilter} and ${communityFilter} and ${hidden} and f.item_id > ${sql.cast(q.after, "bigint")}
 			order by f.item_id asc limit ${q.limit}`
-		: await sql`select * from feed_items f where ${authorFilter} and ${kindFilter} and ${replyFilter} and ${mediaFilter} and ${articleFilter} and ${communityFilter} and ${hidden} and f.item_id < ${q.before ?? NO_LIMIT}::bigint
+		: await sql`select * from feed_items f where ${authorFilter} and ${kindFilter} and ${replyFilter} and ${mediaFilter} and ${articleFilter} and ${communityFilter} and ${hidden} and f.item_id < ${sql.cast(q.before ?? NO_LIMIT, "bigint")}
 			order by f.item_id desc limit ${q.limit}`;
 	if (q.after) rows.reverse();
 
@@ -316,7 +314,7 @@ export async function ancestors(viewerId: string, replyToId: string): Promise<Po
 	const rows = await sql`${select(viewerId)}
 		where p.id in (
 			with recursive chain as (
-				select id, reply_to_id from posts where id = ${replyToId}::bigint
+				select id, reply_to_id from posts where id = ${sql.cast(replyToId, "bigint")}
 				union all
 				select x.id, x.reply_to_id from posts x join chain c on x.id = c.reply_to_id
 			) select id from chain)
@@ -325,7 +323,7 @@ export async function ancestors(viewerId: string, replyToId: string): Promise<Po
 }
 
 export async function replies(viewerId: string, id: string, limit = 100): Promise<PostRow[]> {
-	const rows = await sql`${select(viewerId)} where p.reply_to_id = ${id}::bigint and p.reply_hidden_at is null
+	const rows = await sql`${select(viewerId)} where p.reply_to_id = ${sql.cast(id, "bigint")} and p.reply_hidden_at is null
 		and p.user_id not in ${blockedFor(viewerId)} and p.user_id not in ${outOfView(viewerId)}
 		and not ${hasMutedWord(viewerId, "tweet_replies", sql`p.id`)} order by p.id asc limit ${limit}`;
 	return hydrate(viewerId, rows.map(toRow));
@@ -334,7 +332,7 @@ export async function replies(viewerId: string, id: string, limit = 100): Promis
 export async function repliesBelow(viewerId: string, id: string, limit = 1000): Promise<PostRow[]> {
 	const rows = await sql`${select(viewerId)} where p.id in (
 			with recursive tree as (
-				select id, 1 as depth from posts where reply_to_id = ${id}::bigint
+				select id, 1 as depth from posts where reply_to_id = ${sql.cast(id, "bigint")}
 				union all
 				select x.id, t.depth + 1 from posts x join tree t on x.reply_to_id = t.id where t.depth < 40
 			) select id from tree limit ${limit})
@@ -348,54 +346,54 @@ export const hydratePosts = (viewerId: string, posts: PostRow[]) => hydrate(view
 // Hide reply: only the author of the conversation's first post may hide a
 // reply in it, or show it again.
 export async function setReplyHidden(viewerId: string, replyId: string, hidden: boolean): Promise<void> {
-	const [r] = await sql`select root.user_id::text as root_author from posts p join posts root on root.id = p.conversation_id
-		where p.id = ${replyId}::bigint and p.reply_to_id is not null`;
+	const [r] = await sql`select ${sql.cast(sql`root.user_id`, "text")} as root_author from posts p join posts root on root.id = p.conversation_id
+		where p.id = ${sql.cast(replyId, "bigint")} and p.reply_to_id is not null`;
 	if (!r) throw new PostError("No status found with that ID.", 144);
 	if (r.root_author !== viewerId) throw new PostError("Only the author of the conversation can hide replies.", 200);
-	await sql`update posts set reply_hidden_at = ${hidden ? sql`now()` : null} where id = ${replyId}::bigint`;
+	await sql`update posts set reply_hidden_at = ${hidden ? sql`now()` : null} where id = ${sql.cast(replyId, "bigint")}`;
 }
 
 // what the "Hidden replies" page lists, newest hidden first
 export async function hiddenReplies(viewerId: string, rootId: string, limit = 100): Promise<PostRow[]> {
-	const rows = await sql`${select(viewerId)} where p.conversation_id = ${rootId}::bigint and p.reply_hidden_at is not null
+	const rows = await sql`${select(viewerId)} where p.conversation_id = ${sql.cast(rootId, "bigint")} and p.reply_hidden_at is not null
 		and p.user_id not in ${blockedFor(viewerId)} and p.user_id not in ${outOfView(viewerId)} order by p.reply_hidden_at desc limit ${limit}`;
 	return hydrate(viewerId, rows.map(toRow));
 }
 
 export async function hasHiddenReplies(rootId: string): Promise<boolean> {
-	const [r] = await sql`select 1 from posts where conversation_id = ${rootId}::bigint and reply_hidden_at is not null limit 1`;
+	const [r] = await sql`select 1 from posts where conversation_id = ${sql.cast(rootId, "bigint")} and reply_hidden_at is not null limit 1`;
 	return !!r;
 }
 
 export async function bookmarkedPosts(viewerId: string, limit = 100): Promise<PostRow[]> {
 	const rows = await sql`${select(viewerId)}
-		join bookmarks b on b.post_id = p.id and b.user_id = ${viewerId}::bigint
+		join bookmarks b on b.post_id = p.id and b.user_id = ${sql.cast(viewerId, "bigint")}
 		order by b.created_at desc limit ${limit}`;
 	return hydrate(viewerId, rows.map(toRow));
 }
 
 export async function highlightedPosts(viewerId: string, userId: string, limit = 100): Promise<PostRow[]> {
 	const rows = await sql`${select(viewerId)}
-		join highlights h on h.post_id = p.id and h.user_id = ${userId}::bigint
+		join highlights h on h.post_id = p.id and h.user_id = ${sql.cast(userId, "bigint")}
 		order by h.created_at desc limit ${limit}`;
 	return hydrate(viewerId, rows.map(toRow));
 }
 
 export async function setHighlight(userId: string, postId: string, on: boolean): Promise<boolean> {
 	if (!on) {
-		await sql`delete from highlights where user_id = ${userId}::bigint and post_id = ${postId}::bigint`;
+		await sql`delete from highlights where user_id = ${sql.cast(userId, "bigint")} and post_id = ${sql.cast(postId, "bigint")}`;
 		return true;
 	}
-	const [mine] = await sql`select 1 from posts where id = ${postId}::bigint and user_id = ${userId}::bigint`;
+	const [mine] = await sql`select 1 from posts where id = ${sql.cast(postId, "bigint")} and user_id = ${sql.cast(userId, "bigint")}`;
 	if (!mine) return false;
-	await sql`insert into highlights (user_id, post_id) values (${userId}::bigint, ${postId}::bigint) on conflict do nothing`;
+	await sql`insert into highlights (user_id, post_id) values (${sql.cast(userId, "bigint")}, ${sql.cast(postId, "bigint")}) on conflict do nothing`;
 	return true;
 }
 
 export async function folderPosts(viewerId: string, folderId: string, limit = 100): Promise<PostRow[]> {
 	const rows = await sql`${select(viewerId)}
-		join bookmark_folder_posts f on f.post_id = p.id and f.folder_id = ${folderId}::bigint
-		join bookmark_folders bf on bf.id = f.folder_id and bf.user_id = ${viewerId}::bigint
+		join bookmark_folder_posts f on f.post_id = p.id and f.folder_id = ${sql.cast(folderId, "bigint")}
+		join bookmark_folders bf on bf.id = f.folder_id and bf.user_id = ${sql.cast(viewerId, "bigint")}
 		order by f.created_at desc limit ${limit}`;
 	return hydrate(viewerId, rows.map(toRow));
 }
@@ -403,13 +401,13 @@ export async function folderPosts(viewerId: string, folderId: string, limit = 10
 export async function likedPosts(viewerId: string, userId: string, limit = 100): Promise<PostRow[]> {
 	if (userId !== viewerId && !(await sql`select 1 where ${staffViewer(viewerId)}`).length) return [];
 	const rows = await sql`${select(viewerId)}
-		join likes lk on lk.post_id = p.id and lk.user_id = ${userId}::bigint
+		join likes lk on lk.post_id = p.id and lk.user_id = ${sql.cast(userId, "bigint")}
 		order by lk.created_at desc limit ${limit}`;
 	return hydrate(viewerId, rows.map(toRow));
 }
 
 export async function createPost(userId: string, text: string, opts: { replyToId?: string; quoteId?: string; articleId?: string; source?: string; communityId?: string; placeId?: string; replyPolicy?: string } = {}): Promise<string> {
-	const [author] = await sql`select status, deactivated_at from users where id = ${userId}::bigint`;
+	const [author] = await sql`select status, deactivated_at from users where id = ${sql.cast(userId, "bigint")}`;
 	if (!author || author.status === "restricted" || author.status === "suspended" || author.deactivated_at) throw new PostError("Your account can't post right now.", 326);
 	await checkLength(userId, text);
 	await refuseHate(userId, text);
@@ -418,52 +416,52 @@ export async function createPost(userId: string, text: string, opts: { replyToId
 	let conversationId = id;
 	let replyToUserId: string | null = null;
 	if (opts.replyToId) {
-		const [parent] = await sql`select conversation_id, user_id from posts where id = ${opts.replyToId}::bigint`;
+		const [parent] = await sql`select conversation_id, user_id from posts where id = ${sql.cast(opts.replyToId, "bigint")}`;
 		if (!parent) throw new PostError("The post you are replying to no longer exists.", 385);
 		if (await isBlockedEitherWay(userId, String(parent.user_id))) throw new PostError("You can't reply to this post.", 433);
 		conversationId = parent.conversation_id;
 		replyToUserId = String(parent.user_id);
-		const [limited] = await sql`select exists (select 1 from posts r where r.id = ${conversationId}::bigint and r.reply_policy is not null and r.user_id <> ${userId}::bigint and not (
-				(r.reply_policy = 'Community' and exists (select 1 from follows f where f.follower_id = r.user_id and f.followee_id = ${userId}::bigint))
-				or (r.reply_policy = 'ByInvitation' and exists (select 1 from post_mentions m where m.post_id = r.id and m.user_id = ${userId}::bigint))
-				or (r.reply_policy = 'Verified' and exists (select 1 from users x where x.id = ${userId}::bigint and (x.verified_type is not null or exists (select 1 from affiliations af where af.user_id = x.id)))))) as no`;
+		const [limited] = await sql`select exists (select 1 from posts r where r.id = ${sql.cast(conversationId, "bigint")} and r.reply_policy is not null and r.user_id <> ${sql.cast(userId, "bigint")} and not (
+				(r.reply_policy = 'Community' and exists (select 1 from follows f where f.follower_id = r.user_id and f.followee_id = ${sql.cast(userId, "bigint")}))
+				or (r.reply_policy = 'ByInvitation' and exists (select 1 from post_mentions m where m.post_id = r.id and m.user_id = ${sql.cast(userId, "bigint")}))
+				or (r.reply_policy = 'Verified' and exists (select 1 from users x where x.id = ${sql.cast(userId, "bigint")} and (x.verified_type is not null or exists (select 1 from affiliations af where af.user_id = x.id)))))) as no`;
 		if (limited.no) throw new PostError("The author of the original post limited who can reply to it.", 433);
 	}
 	if (opts.quoteId) {
-		const [quoted] = await sql`select id, user_id from posts where id = ${opts.quoteId}::bigint`;
+		const [quoted] = await sql`select id, user_id from posts where id = ${sql.cast(opts.quoteId, "bigint")}`;
 		if (!quoted) throw new PostError("The post you are quoting no longer exists.", 385);
 		if (await isBlockedEitherWay(userId, String(quoted.user_id))) throw new PostError("You can't quote this post.", 433);
-		const [owner] = await sql`select protected from users where id = ${quoted.user_id}::bigint`;
+		const [owner] = await sql`select protected from users where id = ${sql.cast(quoted.user_id, "bigint")}`;
 		if (owner?.protected && String(quoted.user_id) !== userId) throw new PostError("Posts from protected accounts can't be quoted.", 433);
 	}
 	if (opts.communityId) {
-		const [m] = await sql`select 1 from community_members where community_id = ${opts.communityId}::bigint and user_id = ${userId}::bigint`;
+		const [m] = await sql`select 1 from community_members where community_id = ${sql.cast(opts.communityId, "bigint")} and user_id = ${sql.cast(userId, "bigint")}`;
 		if (!m) throw new PostError("Only members can post in this community.", 187);
 	}
 	await sql`insert into posts (id, user_id, text, reply_to_id, reply_to_user_id, conversation_id, quote_id, article_id, source, community_id, place_id, reply_policy)
-		values (${id}::bigint, ${userId}::bigint, ${text}, ${opts.replyToId ?? null}::bigint, ${replyToUserId}::bigint, ${conversationId}::bigint, ${opts.quoteId ?? null}::bigint, ${opts.articleId ?? null}::bigint, ${opts.source ?? webSource()}, ${opts.communityId ?? null}::bigint, ${opts.placeId ?? null}, ${opts.replyToId ? null : opts.replyPolicy ?? null})`;
+		values (${sql.cast(id, "bigint")}, ${sql.cast(userId, "bigint")}, ${text}, ${sql.cast(opts.replyToId ?? null, "bigint")}, ${sql.cast(replyToUserId, "bigint")}, ${sql.cast(conversationId, "bigint")}, ${sql.cast(opts.quoteId ?? null, "bigint")}, ${sql.cast(opts.articleId ?? null, "bigint")}, ${opts.source ?? webSource()}, ${sql.cast(opts.communityId ?? null, "bigint")}, ${opts.placeId ?? null}, ${opts.replyToId ? null : opts.replyPolicy ?? null})`;
 	const names = [...new Set([...text.matchAll(MENTION)].map((m) => m[1].toLowerCase()))].slice(0, 20);
 	if (names.length)
 		await sql`insert into post_mentions (post_id, user_id)
-			select ${id}::bigint, u.id from users u where lower(u.screen_name) = any(${sql.array(names, "TEXT")}) on conflict do nothing`;
+			select ${sql.cast(id, "bigint")}, u.id from users u where ${sql.contains(sql.array(names, "TEXT"), sql`lower(u.screen_name)`)} on conflict do nothing`;
 	const link = opts.quoteId || opts.articleId ? undefined : linksIn(text).filter((l) => previewable(l.url)).at(-1);
 	if (link && !(await sql`select 1 from link_previews where url = ${link.url}`).length) await Promise.race([fetchPreview(link.url), Bun.sleep(4000)]);
 	return id;
 }
 
 export async function deletePost(userId: string, id: string): Promise<boolean> {
-	const rows = await sql`delete from posts where id = ${id}::bigint and user_id = ${userId}::bigint returning id`;
+	const rows = await sql`delete from posts where id = ${sql.cast(id, "bigint")} and user_id = ${sql.cast(userId, "bigint")} returning id`;
 	return rows.length > 0;
 }
 
 // only the author can pin, and only one post at a time
 export async function setPinned(userId: string, postId: string | null): Promise<boolean> {
 	if (postId === null) {
-		await sql`update users set pinned_post_id = null where id = ${userId}::bigint`;
+		await sql`update users set pinned_post_id = null where id = ${sql.cast(userId, "bigint")}`;
 		return true;
 	}
-	const rows = await sql`update users set pinned_post_id = ${postId}::bigint
-		where id = ${userId}::bigint and exists (select 1 from posts where id = ${postId}::bigint and user_id = ${userId}::bigint)
+	const rows = await sql`update users set pinned_post_id = ${sql.cast(postId, "bigint")}
+		where id = ${sql.cast(userId, "bigint")} and exists (select 1 from posts where id = ${sql.cast(postId, "bigint")} and user_id = ${sql.cast(userId, "bigint")})
 		returning id`;
 	return rows.length > 0;
 }
@@ -472,18 +470,18 @@ export async function setPinned(userId: string, postId: string | null): Promise<
 export async function setPinnedReply(userId: string, conversationId: string, replyId: string, on: boolean): Promise<boolean> {
 	if (!on) {
 		const rows = await sql`update posts set pinned_reply_id = null
-			where id = ${conversationId}::bigint and user_id = ${userId}::bigint and pinned_reply_id = ${replyId}::bigint returning id`;
+			where id = ${sql.cast(conversationId, "bigint")} and user_id = ${sql.cast(userId, "bigint")} and pinned_reply_id = ${sql.cast(replyId, "bigint")} returning id`;
 		return rows.length > 0;
 	}
-	const rows = await sql`update posts set pinned_reply_id = ${replyId}::bigint
-		where id = ${conversationId}::bigint and user_id = ${userId}::bigint and reply_to_id is null
-			and exists (select 1 from posts r where r.id = ${replyId}::bigint and r.reply_to_id = ${conversationId}::bigint and not r.hidden)
+	const rows = await sql`update posts set pinned_reply_id = ${sql.cast(replyId, "bigint")}
+		where id = ${sql.cast(conversationId, "bigint")} and user_id = ${sql.cast(userId, "bigint")} and reply_to_id is null
+			and exists (select 1 from posts r where r.id = ${sql.cast(replyId, "bigint")} and r.reply_to_id = ${sql.cast(conversationId, "bigint")} and not r.hidden)
 		returning id`;
 	return rows.length > 0;
 }
 
 export async function pinnedReplyOf(postId: string): Promise<string | null> {
-	const [row] = await sql`select pinned_reply_id::text as id from posts where id = ${postId}::bigint`;
+	const [row] = await sql`select ${sql.cast(sql`pinned_reply_id`, "text")} as id from posts where id = ${sql.cast(postId, "bigint")}`;
 	return row?.id ?? null;
 }
 
@@ -495,29 +493,29 @@ export async function setMark(table: Mark, userId: string, postId: string, on: b
 	// hidden): X's "not found", not a database error
 	if (on && !(await getPost(userId, postId))) throw new PostError("No status found with that ID.", 144);
 	if (table === "likes") {
-		if (on) await sql`insert into likes (user_id, post_id) values (${userId}::bigint, ${postId}::bigint) on conflict do nothing`;
-		else await sql`delete from likes where user_id = ${userId}::bigint and post_id = ${postId}::bigint`;
+		if (on) await sql`insert into likes (user_id, post_id) values (${sql.cast(userId, "bigint")}, ${sql.cast(postId, "bigint")}) on conflict do nothing`;
+		else await sql`delete from likes where user_id = ${sql.cast(userId, "bigint")} and post_id = ${sql.cast(postId, "bigint")}`;
 	} else {
-		if (on) await sql`insert into bookmarks (user_id, post_id) values (${userId}::bigint, ${postId}::bigint) on conflict do nothing`;
-		else await sql`delete from bookmarks where user_id = ${userId}::bigint and post_id = ${postId}::bigint`;
+		if (on) await sql`insert into bookmarks (user_id, post_id) values (${sql.cast(userId, "bigint")}, ${sql.cast(postId, "bigint")}) on conflict do nothing`;
+		else await sql`delete from bookmarks where user_id = ${sql.cast(userId, "bigint")} and post_id = ${sql.cast(postId, "bigint")}`;
 	}
 }
 
 export async function repost(userId: string, postId: string): Promise<string> {
 	postId = await originalPostId(postId);
 	// a protected account's posts can't be passed on
-	const [owner] = await sql`select u.protected, u.id::text as owner from posts p join users u on u.id = p.user_id where p.id = ${postId}::bigint`;
+	const [owner] = await sql`select u.protected, ${sql.cast(sql`u.id`, "text")} as owner from posts p join users u on u.id = p.user_id where p.id = ${sql.cast(postId, "bigint")}`;
 	if (!owner || !(await getPost(userId, postId))) throw new PostError("No status found with that ID.", 144);
 	if (owner?.protected && owner.owner !== userId) throw new PostError("Posts from protected accounts can't be reposted.", 328);
 	const id = newId();
-	const rows = await sql`insert into reposts (id, user_id, post_id) values (${id}::bigint, ${userId}::bigint, ${postId}::bigint)
+	const rows = await sql`insert into reposts (id, user_id, post_id) values (${sql.cast(id, "bigint")}, ${sql.cast(userId, "bigint")}, ${sql.cast(postId, "bigint")})
 		on conflict (user_id, post_id) do update set post_id = excluded.post_id returning id`;
 	return rows[0].id;
 }
 
 export async function unrepost(userId: string, postId: string) {
 	postId = await originalPostId(postId);
-	await sql`delete from reposts where user_id = ${userId}::bigint and post_id = ${postId}::bigint`;
+	await sql`delete from reposts where user_id = ${sql.cast(userId, "bigint")} and post_id = ${sql.cast(postId, "bigint")}`;
 }
 
 export class PostError extends Error {

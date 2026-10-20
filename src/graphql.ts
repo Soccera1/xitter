@@ -81,7 +81,7 @@ const PARODY_LABELS = new Set(["None", "Parody", "Commentary", "Fan"]);
 // the client's confirm dialog says a change locks the label for 48 hours
 const PARODY_LOCK_MS = 48 * 3600_000;
 async function parodySettings(userId: string) {
-	const [u] = await sql`select parody_label, parody_label_at from users where id = ${userId}::bigint`;
+	const [u] = await sql`select parody_label, parody_label_at from users where id = ${sql.cast(userId, "bigint")}`;
 	const left = u?.parody_label_at ? new Date(u.parody_label_at).getTime() + PARODY_LOCK_MS - Date.now() : 0;
 	const locked = left > 0;
 	return {
@@ -97,9 +97,9 @@ async function setParodyLabel(userId: string, label: unknown) {
 	if (now.parody_commentary_fan_label === label) return;
 	if (now.is_label_update_disabled) throw new PostError(now.update_disabled_reason!, 214);
 	// a label staff gave the account stays: the client would show this one over it
-	const [staffLabel] = await sql`select 1 from users where id = ${userId}::bigint and label_id is not null`;
+	const [staffLabel] = await sql`select 1 from users where id = ${sql.cast(userId, "bigint")} and label_id is not null`;
 	if (staffLabel) throw new PostError("Your profile label was set by this instance's staff.", 214);
-	await sql`update users set parody_label = ${label}, parody_label_at = now() where id = ${userId}::bigint`;
+	await sql`update users set parody_label = ${label}, parody_label_at = now() where id = ${sql.cast(userId, "bigint")}`;
 }
 
 function postId(vars: Vars, key = "tweet_id"): string {
@@ -132,7 +132,7 @@ const homeResponse = (entries: unknown[], feedbackActions: unknown[] = []) => ({
 async function globalPin(viewer: Viewer, entries: unknown[], first: boolean) {
 	const id = settings().operations.global_pin;
 	if (!first || !id) return;
-	const [visible] = await sql`select id from posts where id = ${id}::bigint and not hidden and user_id not in ${blockedFor(viewer.id)} and user_id not in ${outOfView(viewer.id)}`;
+	const [visible] = await sql`select id from posts where id = ${sql.cast(id, "bigint")} and not hidden and user_id not in ${blockedFor(viewer.id)} and user_id not in ${outOfView(viewer.id)}`;
 	const post = visible && (await getPost(viewer.id, id));
 	if (!post) return;
 	for (let i = entries.length - 1; i >= 0; i--) if ((entries[i] as any).entryId === `tweet-${id}`) entries.splice(i, 1);
@@ -246,7 +246,7 @@ const tweetDetail: Handler = async (viewer, vars) => {
 		let sort = BigInt(newId());
 		const missing = (above[0] ?? focal).reply_to_id;
 		if (missing) {
-			const [still] = await sql`select 1 from posts where id = ${missing}::bigint`;
+			const [still] = await sql`select 1 from posts where id = ${sql.cast(missing, "bigint")}`;
 			entries.push(tombstoneEntry(missing, still ? "This post is unavailable." : "This post was deleted by its author.", (sort--).toString()));
 		}
 		for (const p of above) entries.push(tweetEntry(p, (sort--).toString()));
@@ -344,7 +344,7 @@ const createTweet: Handler = async (viewer, vars) => {
 	if (mediaIds.length) await attachMedia(viewer.id, id, mediaIds);
 	// a content warning on any of its media makes the post sensitive
 	if (vars.media?.possibly_sensitive === true || mediaIds.length)
-		await sql`update posts set sensitive = true where id = ${id}::bigint and (${vars.media?.possibly_sensitive === true}
+		await sql`update posts set sensitive = true where id = ${sql.cast(id, "bigint")} and (${vars.media?.possibly_sensitive === true}
 			or exists (select 1 from media m where m.post_id = posts.id and m.sensitive_warning is not null))`;
 	const post = await getPost(viewer.id, id);
 	return { data: { create_tweet: { tweet_results: { result: tweetResult(post!, false) } } } };
@@ -432,8 +432,8 @@ const reactors = (kind: "reposts" | "likes", key: string): Handler => async (vie
 	if (!isId(vars.tweetId) || vars.cursor) return empty;
 	const rows =
 		kind === "reposts"
-			? await sql`select r.user_id::text as id from reposts r where r.post_id = ${vars.tweetId}::bigint and r.user_id not in ${blockedFor(viewer.id)} and r.user_id not in ${protectedFor(viewer.id)} and r.user_id not in ${outOfView(viewer.id)} order by r.created_at desc limit 100`
-			: await sql`select l.user_id::text as id from likes l where l.post_id = ${vars.tweetId}::bigint and l.user_id not in ${blockedFor(viewer.id)} and l.user_id not in ${protectedFor(viewer.id)} and l.user_id not in ${outOfView(viewer.id)} order by l.created_at desc limit 100`;
+			? await sql`select ${sql.cast(sql`r.user_id`, "text")} as id from reposts r where r.post_id = ${sql.cast(vars.tweetId, "bigint")} and r.user_id not in ${blockedFor(viewer.id)} and r.user_id not in ${protectedFor(viewer.id)} and r.user_id not in ${outOfView(viewer.id)} order by r.created_at desc limit 100`
+			: await sql`select ${sql.cast(sql`l.user_id`, "text")} as id from likes l where l.post_id = ${sql.cast(vars.tweetId, "bigint")} and l.user_id not in ${blockedFor(viewer.id)} and l.user_id not in ${protectedFor(viewer.id)} and l.user_id not in ${outOfView(viewer.id)} order by l.created_at desc limit 100`;
 	const users = await usersByIds(viewer.id, rows.map((r: any) => r.id));
 	const base = BigInt(newId());
 	const entries = rows.flatMap((r: any, i: number) => (users.has(r.id) ? [userEntry(users.get(r.id)!, (base - BigInt(i) - 1n).toString())] : []));
@@ -494,7 +494,7 @@ function basedIn(country: string | null, preference: string | null): string | nu
 const handlers: Record<string, Handler> = {
 	// Settings > Notifications > Email: what is stored is what would be mailed
 	ViewerEmailSettings: async (v: Viewer) => {
-		const [u] = await sql`select email_settings from users where id = ${v.id}::bigint`;
+		const [u] = await sql`select email_settings from users where id = ${sql.cast(v.id, "bigint")}`;
 		const stored = u?.email_settings ?? {};
 		const settings = Object.fromEntries(EMAIL_SETTINGS.map((k) => [k, stored[k] ?? false]));
 		return { data: { viewer: { user_results: { result: { __typename: "User", id: userGlobalId(v.id), notifications_email_notifications: settings } } } } };
@@ -502,11 +502,11 @@ const handlers: Record<string, Handler> = {
 	WriteEmailNotificationSettings: async (v: Viewer, vars: Vars) => {
 		const given = typeof vars.settings === "object" && vars.settings ? (vars.settings as Record<string, unknown>) : {};
 		const next = Object.fromEntries(EMAIL_SETTINGS.filter((k) => typeof given[k] === "boolean" || (typeof given[k] === "string" && ["Daily", "Weekly", "Periodically", "None"].includes(given[k] as string))).map((k) => [k, given[k]]));
-		await sql`update users set email_settings = email_settings || ${JSON.stringify(next)}::text::jsonb where id = ${v.id}::bigint`;
+		await sql`update users set email_settings = ${sql.jsonMerge(sql`email_settings`, sql.cast(JSON.stringify(next), "jsonb"))} where id = ${sql.cast(v.id, "bigint")}`;
 		return { data: { write_email_notification_settings: "Done" } };
 	},
 	UserPreferencesQuery: async (v: Viewer) => {
-		const [u] = await sql`select preferences from users where id = ${v.id}::bigint`;
+		const [u] = await sql`select preferences from users where id = ${sql.cast(v.id, "bigint")}`;
 		const p = (u?.preferences ?? {}) as Record<string, unknown>;
 		return {
 			data: {
@@ -535,7 +535,7 @@ const handlers: Record<string, Handler> = {
 		if (vars.inferred_location_resolution_preference === "Country" || vars.inferred_location_resolution_preference === "Region" || vars.inferred_location_resolution_preference === "Unspecified")
 			next.inferred_location_resolution_preference = vars.inferred_location_resolution_preference;
 		if (typeof vars.allow_for_you_recommendations === "boolean") next.allow_for_you_recommendations = vars.allow_for_you_recommendations;
-		await sql`update users set preferences = preferences || ${JSON.stringify(next)}::text::jsonb where id = ${v.id}::bigint`;
+		await sql`update users set preferences = ${sql.jsonMerge(sql`preferences`, sql.cast(JSON.stringify(next), "jsonb"))} where id = ${sql.cast(v.id, "bigint")}`;
 		return { data: { user_preferences_put: "Done" } };
 	},
 	// the note under Settings > About your account about a location that may be off
@@ -579,7 +579,7 @@ const handlers: Record<string, Handler> = {
 	}),
 	PutClientEducationFlag: async (v: Viewer, vars: Vars) => {
 		if (typeof vars.flag === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(vars.flag))
-			await sql`update users set education_flags = education_flags || ${JSON.stringify({ [vars.flag]: Date.now() })}::text::jsonb where id = ${v.id}::bigint`;
+			await sql`update users set education_flags = ${sql.jsonMerge(sql`education_flags`, sql.cast(JSON.stringify({ [vars.flag]: Date.now() }), "jsonb"))} where id = ${sql.cast(v.id, "bigint")}`;
 		return { data: { add_client_education_flag_put: "Done" } };
 	},
 	HomeTimeline: forYou,
@@ -626,7 +626,7 @@ const handlers: Record<string, Handler> = {
 		const id = await originalPostId(postId(vars));
 		await setMark("bookmarks", v.id, id, false);
 		// an unbookmarked post leaves the viewer's folders too
-		await sql`delete from bookmark_folder_posts where post_id = ${id}::bigint and folder_id in (select id from bookmark_folders where user_id = ${v.id}::bigint)`;
+		await sql`delete from bookmark_folder_posts where post_id = ${sql.cast(id, "bigint")} and folder_id in (select id from bookmark_folders where user_id = ${sql.cast(v.id, "bigint")})`;
 		return { data: { tweet_bookmark_delete: "Done" } };
 	},
 	CreateRetweet: async (v, vars) => {
@@ -658,7 +658,7 @@ const handlers: Record<string, Handler> = {
 		// staff too: they look a suspended account up in the admin panel
 		if (user.status === "suspended") return { data: { user: { result: SUSPENDED_USER } } };
 		// a visit for the profile's analytics, once a day per visitor
-		if (user.id !== v.id) sql`insert into profile_visits (profile_id, visitor_id) values (${user.id}::bigint, ${v.id}::bigint) on conflict do nothing`.catch(() => {});
+		if (user.id !== v.id) sql`insert into profile_visits (profile_id, visitor_id) values (${sql.cast(user.id, "bigint")}, ${sql.cast(v.id, "bigint")}) on conflict do nothing`.catch(() => {});
 		return { data: { user: { result: userResult(user) } } };
 	},
 	// "About this account" (/<name>/about)
@@ -666,12 +666,12 @@ const handlers: Record<string, Handler> = {
 		const user = typeof vars.screenName === "string" ? await userByName(v.id, vars.screenName) : undefined;
 		if (!user || user.status === "suspended")
 			return { data: { user_result_by_screen_name: { result: { __typename: "UserUnavailable", unavailable_reason: user ? "Suspended" : "NotFound" } } } };
-		const [extra] = await sql`select u.verified_at, u.country, u.based_in_override, u.signup_country, u.preferences->>'inferred_location_resolution_preference' as location_pref,
+		const [extra] = await sql`select u.verified_at, u.country, u.based_in_override, u.signup_country, ${sql.jsonGet(sql`u.preferences`, sql`'inferred_location_resolution_preference'`, true)} as location_pref,
 			-- accounts from before sign-ups were recorded: the app of their first post
 			coalesce(u.signup_source, (select p.source from posts p where p.user_id = u.id order by p.id limit 1)) as source,
-			(select count(*)::int from username_changes c where c.user_id = u.id) as changes,
+			(select ${sql.cast(sql`count(*)`, "int")} from username_changes c where c.user_id = u.id) as changes,
 			(select max(c.changed_at) from username_changes c where c.user_id = u.id) as last_change
-			from users u where u.id = ${user.id}::bigint`;
+			from users u where u.id = ${sql.cast(user.id, "bigint")}`;
 		const base = userResult(user);
 		return {
 			data: {
@@ -782,7 +782,7 @@ const handlers: Record<string, Handler> = {
 	// the sheet behind "Add/remove from Highlights": is this post one of the viewer's highlights
 	HighlightTweetSheetQuery: async (v, vars) => {
 		const id = postId(vars);
-		const [row] = await sql`select 1 from highlights where user_id = ${v.id}::bigint and post_id = ${id}::bigint`;
+		const [row] = await sql`select 1 from highlights where user_id = ${sql.cast(v.id, "bigint")} and post_id = ${sql.cast(id, "bigint")}`;
 		return { data: { tweet_result_by_rest_id: { result: { __typename: "Tweet", id: Buffer.from(`Tweet:${id}`).toString("base64"), rest_id: id, highlights_info: { highlighted: !!row } } } } };
 	},
 	// who-can-reply choices beyond the built-in ones: none here

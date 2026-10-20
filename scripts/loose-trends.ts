@@ -7,7 +7,7 @@ export async function loosenTrends(origin: string): Promise<() => Promise<void>>
 	const saved = structuredClone(settings().operations);
 	const name = `lt${Date.now().toString(36)}`;
 	const id = await createUser(name, name, "testpass123");
-	await sql`update users set role = 'admin' where id = ${id}::bigint`;
+	await sql`update users set role = 'admin' where id = ${sql.cast(id, "bigint")}`;
 	const r = await fetch(`${origin}/login`, { method: "POST", body: new URLSearchParams({ username: name, password: "testpass123" }), redirect: "manual" });
 	const cookies = r.headers.getSetCookie().map((c) => c.split(";")[0]);
 	const csrf = cookies.find((c) => c.startsWith("ct0="))?.slice(4) ?? "";
@@ -17,7 +17,7 @@ export async function loosenTrends(origin: string): Promise<() => Promise<void>>
 	if (!res.ok) throw new Error(`couldn't loosen trends: ${await res.text()}`);
 	return async () => {
 		await save(saved);
-		await sql`delete from audit_log where actor_id = ${id}::bigint`;
-		await sql`delete from users where id = ${id}::bigint`;
+		await sql`delete from audit_log where actor_id = ${sql.cast(id, "bigint")}`;
+		await sql`delete from users where id = ${sql.cast(id, "bigint")}`;
 	};
 }

@@ -280,7 +280,7 @@ async function route(req: Request): Promise<Response | undefined> {
 	if (p === "/xchat/ws") {
 		const userId = socketUser(url.searchParams.get("token") ?? "");
 		if (!userId) return new Response("bad token", { status: 401 });
-		const [account] = await sql`select 1 from users where id = ${userId}::bigint and status <> 'suspended'`;
+		const [account] = await sql`select 1 from users where id = ${sql.cast(userId, "bigint")} and status <> 'suspended'`;
 		if (!account) return new Response("suspended", { status: 403 });
 		return server.upgrade(req, { data: { userId } }) ? undefined : new Response("expected a websocket", { status: 400 });
 	}
@@ -396,8 +396,8 @@ async function route(req: Request): Promise<Response | undefined> {
 	}
 	// signed out: X's own home page with its sign-in form, and the dialog
 	if (!viewer && p !== "/" && !p.startsWith("/i/jf/onboarding")) return Response.redirect("/", 302);
-	const inCommunity = viewer ? (await sql`select 1 from community_members where user_id = ${viewer.id}::bigint limit 1`).length > 0 : false;
-	const [flagRow] = viewer ? await sql`select education_flags from users where id = ${viewer.id}::bigint` : [];
+	const inCommunity = viewer ? (await sql`select 1 from community_members where user_id = ${sql.cast(viewer.id, "bigint")} limit 1`).length > 0 : false;
+	const [flagRow] = viewer ? await sql`select education_flags from users where id = ${sql.cast(viewer.id, "bigint")}` : [];
 	const page = shell(viewer ?? null, !!parseCookies(req).auth_multi, inCommunity, flagRow?.education_flags ?? {}, viewer ? await menuLinks(viewer.id) : []);
 	if (!page) return new Response("no pinned client build: run scripts/fetch-client.ts --token or --har", { status: 500 });
 	const headers = new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": PAGE_CSP });

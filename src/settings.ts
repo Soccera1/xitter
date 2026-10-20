@@ -119,7 +119,7 @@ export const hasBlockedPhrase = (text: string) => {
 };
 
 export async function setSetting<K extends Key>(key: K, value: Settings[K]) {
-	await sql`insert into settings (key, value) values (${key}, ${JSON.stringify(value)}::text::jsonb)
+	await sql`insert into settings (key, value) values (${key}, ${sql.cast(JSON.stringify(value), "jsonb")})
 		on conflict (key) do update set value = excluded.value`;
 	current = { ...current, [key]: value };
 }

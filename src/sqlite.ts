@@ -1,10 +1,9 @@
-// SQLite implementation of the small tagged SQL interface used by the app.
-// Values are always bound; only trusted SQL fragments and quoted identifiers
-// participate in compilation. PostgreSQL remains the canonical query dialect.
+// Native SQLite connection. Only the worker and isolated migration tests import this.
 import { DatabaseSync } from "node:sqlite";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { ArrayValue, createSQL, decodeFields, type CompiledQuery } from "./db/query";
+import { serialDriver } from "./db/serial-driver";
 
 function pgRegex(pattern: string, flags = "") {
 	pattern = pattern.replaceAll("[:alnum:]", "\\p{L}\\p{N}");
@@ -30,172 +29,6 @@ function interval(value: string) {
 	const m = /^\s*([\d.]+)\s+(\w+)\s*$/.exec(value);
 	if (!m || !units[m[2].replace(/s$/, "")]) throw new Error(`Unsupported interval: ${value}`);
 	return Number(m[1]) * units[m[2].replace(/s$/, "")];
-}
-
-// Translate the PostgreSQL constructs used by this repository. Complex queries
-// use explicit backend branches; this is not a general PostgreSQL SQL parser.
-// Tokenize first so SQL-looking text in literals/identifiers is never changed.
-export function sqliteSQL(source: string): string {
-	const literals: string[] = [];
-	const identifiers: string[] = [];
-	let s = source.replace(/'(?:''|[^'])*'|"(?:""|[^"])*"|--[^\n]*|\/\*[\s\S]*?\*\//g, (value) => {
-		if (value.startsWith("'")) return `__lit${literals.push(value) - 1}__`;
-		if (value.startsWith('"')) return `__ident${identifiers.push(value) - 1}__`;
-		return " ";
-	});
-	const literal = (token: string) => literals[Number(/\d+/.exec(token)![0])].slice(1, -1).replaceAll("''", "'");
-	s = s.replace(/\binterval\s+(__lit\d+__)/gi, (_, v) => String(interval(literal(v))));
-	s = s.replace(/\bmake_interval\(\s*(days|hours|mins)\s*=>\s*([^()]+)\)/gi, (_, unit, n) => `(${n} * ${units[unit.replace(/s$/, "")]})`);
-	// Keep the PostgreSQL result name for selected casts without an explicit alias.
-	const tokens = s
-		.match(/__lit\d+__|\$\d+|"(?:""|[^"])*"|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\w+|::|->>|->|<>|!=|<=|>=|\|\||~\*|!~\*|!~|[\s\S]/g)!
-		.filter((t) => !/^\s+$/.test(t));
-	function start(i: number): number {
-		if (tokens[i] === ")" || tokens[i] === "]") {
-			const close = tokens[i],
-				open = close === ")" ? "(" : "[";
-			let depth = 1;
-			while (--i >= 0) {
-				if (tokens[i] === close) depth++;
-				if (tokens[i] === open) {
-					depth--;
-					if (depth === 0) break;
-				}
-			}
-			// function call, except SQL keywords before a grouped expression
-			if (i > 0 && /^\w+$/.test(tokens[i - 1]) && !/^(select|where|and|or|not|in|exists|when|then|else|from|on|as|by|having|returning)$/i.test(tokens[i - 1]))
-				i--;
-		}
-		if (tokens[i]?.toLowerCase() === "filter") return start(i - 1);
-		while (i >= 2 && tokens[i - 1] === ".") i -= 2;
-		return i;
-	}
-	for (let i = 0; i < tokens.length; i++) {
-		if (tokens[i] !== "::") continue;
-		const from = start(i - 1),
-			type = tokens[i + 1].toLowerCase();
-		let end = i + 2;
-		const array = tokens[end] === "[" && tokens[end + 1] === "]";
-		if (array) end += 2;
-		const expr = tokens.slice(from, i).join(" ");
-		let value = expr;
-		if (!array) {
-			if (type === "text" || type === "uuid") value = `cast(${expr} as text)`;
-			else if (type === "bigint") value = `pg_bigint(${expr})`;
-			else if (type === "int" || type === "integer") value = `cast(${expr} as integer)`;
-			else if (type === "timestamptz" || type === "date") value = `epoch_ms(${expr})`;
-			else if (type === "interval") value = `interval_ms(${expr})`;
-			else if (type === "boolean") value = `boolean_value(${expr})`;
-		}
-		// Bare selected column casts retain their column name in PostgreSQL.
-		if (/^(?:[a-z_]\w* \. )?[a-z_]\w*$/i.test(expr) && /^(,|from|$)$/i.test(tokens[end] ?? "")) {
-			let depth = 0,
-				selected = false;
-			for (let j = from - 1; j >= 0; j--) {
-				if (tokens[j] === ")") depth++;
-				if (tokens[j] === "(") {
-					if (!depth) break;
-					depth--;
-				}
-				if (!depth && /^(select|returning|where|values|on|order|group|having)$/i.test(tokens[j])) {
-					selected = /^(select|returning)$/i.test(tokens[j]);
-					break;
-				}
-			}
-			if (selected) value += ` as ${expr.split(" ").at(-1)}`;
-		}
-		tokens.splice(from, end - from, value);
-		i = from;
-	}
-	for (let i = 0; i < tokens.length; i++) {
-		if (
-			!/^(~|~\*|!~|!~\*|ilike|like|->>)$/i.test(tokens[i]) &&
-			!(/^(\|\||-)$/.test(tokens[i]) && /^(preferences|email_settings|education_flags|settings)$/i.test(tokens[i - 1]))
-		)
-			continue;
-		const from = start(i - 1);
-		let end = i + 2;
-		if (tokens[i + 1] === "(" || tokens[i + 2] === "(") {
-			let depth = 0;
-			end = tokens[i + 1] === "(" ? i + 1 : i + 2;
-			do {
-				if (tokens[end] === "(") depth++;
-				if (tokens[end] === ")") depth--;
-				end++;
-			} while (depth && end < tokens.length);
-		} else while (tokens[end] === ".") end += 2;
-		const lhs = tokens.slice(from, i).join(" "),
-			rhs = tokens.slice(i + 1, end).join(" ");
-		const op = tokens[i].toLowerCase();
-		const value =
-			op === "-"
-				? `json_delete(${lhs}, ${rhs})`
-				: op === "||"
-					? `json_concat(${lhs}, ${rhs})`
-					: op === "->>"
-						? `json_text(${lhs}, ${rhs})`
-						: /like$/.test(op)
-							? `pg_like(${lhs}, ${rhs}, ${op === "ilike" ? 1 : 0})`
-							: `${op.startsWith("!") ? "not " : ""}regexp_pg(${rhs}, ${lhs}, ${op.endsWith("*") ? 1 : 0})`;
-		tokens.splice(from, end - from, value);
-		i = from;
-	}
-
-	s = tokens.join(" ");
-	s = s.replace(/\bas\s+returning\b/gi, 'as "returning"');
-	s = s.replace(/\bupdate\s+(\w+)\s+(\w+)\s+set\b/gi, "update $1 as $2 set");
-	// ANY/ALL take either a JSON array column or one bound JSON array.
-	s = s.replace(/=\s*any\s*\(/gi, "in (select value from json_each(").replace(/<>\s*all\s*\(/gi, "not in (select value from json_each(");
-	// Close the subquery introduced above, respecting nested expressions.
-	const marker = /(?:not )?in \(select value from json_each\(/g;
-	let m: RegExpExecArray | null;
-	while ((m = marker.exec(s))) {
-		let depth = 1,
-			i = marker.lastIndex;
-		for (; i < s.length; i++) {
-			if (s[i] === "(") depth++;
-			if (s[i] === ")") {
-				depth--;
-				if (depth === 0) break;
-			}
-		}
-		s = s.slice(0, i + 1) + ")" + s.slice(i + 1);
-		marker.lastIndex = i + 2;
-	}
-	s = s.replace(/\bis\s+not\s+distinct\s+from\b/gi, "is").replace(/\bis\s+distinct\s+from\b/gi, "is not");
-	s = s.replace(/\bfor\s+update(?:\s+skip\s+locked)?/gi, "");
-	s = s.replace(/\bextract\s*\(\s*epoch\s+from\s+/gi, "(1.0 / 1000 * ");
-	s = s.replace(/\bposition\s*\(\s*(lower\s*\([^()]*\))\s+in\s+(lower\s*\([^()]*\))\s*\)/gi, "instr($2, $1)");
-	s = s.replace(/\bjsonb_agg\s*\(\s*([\w. ]+)\s*\)/gi, "json_group_array(json($1))");
-	s = s
-		.replace(/\bjsonb?_agg\b/gi, "json_group_array")
-		.replace(/\barray_agg\b/gi, "json_group_array")
-		.replace(/\bjsonb?_build_object\b/gi, "json_object");
-	s = s
-		.replace(/\bbool_or\b/gi, "max")
-		.replace(/\bgreatest\b/gi, "max")
-		.replace(/\bleast\b/gi, "min")
-		.replace(/\bchar_length\b/gi, "length");
-	s = s.replace(/__(lit|ident)(\d+)__/g, (_, kind, i) => (kind === "lit" ? literals : identifiers)[Number(i)]);
-	return s;
-}
-
-class Fragment implements PromiseLike<any[]> {
-	constructor(
-		readonly source: string,
-		readonly values: any[],
-		private execute: (fragment: Fragment) => Promise<any[]>,
-	) {}
-	private pending?: Promise<any[]>;
-	private run() {
-		return (this.pending ??= this.execute(this));
-	}
-	then(a?: any, b?: any): any {
-		return this.run().then(a, b);
-	}
-	catch(b: any) {
-		return this.run().catch(b);
-	}
 }
 
 export function openSQLite(filename: string) {
@@ -243,30 +76,80 @@ export function openSQLite(filename: string) {
 	connection.function("lower", { deterministic: true }, (v: any) => (v == null ? null : String(v).toLowerCase()));
 	connection.function("upper", { deterministic: true }, (v: any) => (v == null ? null : String(v).toUpperCase()));
 	db.function("json_delete", (v: any, key: any) => {
-		if (v == null) return null;
+		if (v == null || key == null) return null;
 		const obj = JSON.parse(String(v));
+		if (obj === null || typeof obj !== "object") throw new Error("Cannot delete from scalar JSON");
+		if (Array.isArray(obj)) {
+			if (typeof key === "bigint" || typeof key === "number") {
+				const index = Number(key) < 0 ? obj.length + Number(key) : Number(key);
+				if (index >= 0 && index < obj.length) obj.splice(index, 1);
+				return JSON.stringify(obj);
+			}
+			return JSON.stringify(obj.filter((value) => value !== String(key)));
+		}
+		if (typeof key !== "string") throw new Error("Cannot delete an integer index from a JSON object");
 		delete obj[String(key)];
 		return JSON.stringify(obj);
 	});
 	db.function("jsonb_set", (v: any, path: any, value: any) => {
-		if (v == null || value == null) return null;
+		if (v == null || path == null || value == null) return null;
 		const obj = JSON.parse(String(v)),
-			keys = String(path).slice(1, -1).split(",");
+			keys: string[] = String(path).startsWith("[") ? JSON.parse(String(path)) : String(path) === "{}" ? [] : String(path).slice(1, -1).split(",");
+		if (!keys.length) return JSON.stringify(obj);
+		if (obj === null || typeof obj !== "object") throw new Error("Cannot set a path in scalar JSON");
 		let target = obj;
-		for (const key of keys.slice(0, -1)) {
-			if (!target[key]) return JSON.stringify(obj);
+		for (const part of keys.slice(0, -1)) {
+			if (target === null || typeof target !== "object") return JSON.stringify(obj);
+			const key = Array.isArray(target) && Number(part) < 0 ? target.length + Number(part) : part;
+			if (!Object.hasOwn(target, key)) return JSON.stringify(obj);
 			target = target[key];
 		}
-		target[keys.at(-1)!] = JSON.parse(String(value));
+		if (target === null || typeof target !== "object") return JSON.stringify(obj);
+		const last = keys.at(-1)!,
+			replacement = JSON.parse(String(value));
+		if (Array.isArray(target)) {
+			if (!/^-?\d+$/.test(last)) throw new Error("JSON array path must be an integer");
+			const index = Number(last) < 0 ? target.length + Number(last) : Number(last);
+			if (index < 0) target.unshift(replacement);
+			else if (index >= target.length) target.push(replacement);
+			else target[index] = replacement;
+		} else Object.defineProperty(target, last, { value: replacement, enumerable: true, configurable: true, writable: true });
 		return JSON.stringify(obj);
 	});
-	db.function("json_concat", (a: any, b: any) => (a == null || b == null ? null : JSON.stringify({ ...JSON.parse(String(a)), ...JSON.parse(String(b)) })));
+	db.function("json_concat", (a: any, b: any) => {
+		if (a == null || b == null) return null;
+		const left = JSON.parse(String(a)),
+			right = JSON.parse(String(b));
+		const object = (value: any) => value !== null && typeof value === "object" && !Array.isArray(value);
+		return JSON.stringify(
+			object(left) && object(right) ? { ...left, ...right } : [...(Array.isArray(left) ? left : [left]), ...(Array.isArray(right) ? right : [right])],
+		);
+	});
+	function jsonMember(v: any, key: any) {
+		if (v == null || key == null) return undefined;
+		const obj = JSON.parse(String(v));
+		if (obj === null || typeof obj !== "object") return undefined;
+		if (Array.isArray(obj) && typeof key === "string") return undefined;
+		if (!Array.isArray(obj) && typeof key !== "string") return undefined;
+		const index = Array.isArray(obj) && Number(key) < 0 ? obj.length + Number(key) : String(key);
+		return Object.hasOwn(obj, index) ? obj[index] : undefined;
+	}
+	db.function("json_get", (v: any, key: any) => {
+		const value = jsonMember(v, key);
+		return value === undefined ? null : JSON.stringify(value);
+	});
 	db.function("json_text", (v: any, key: any) => {
-		if (v == null || key == null) return null;
-		const value = JSON.parse(String(v))[String(key)];
+		const value = jsonMember(v, key);
 		return value == null ? null : typeof value === "string" ? value : JSON.stringify(value);
 	});
-	db.function("boolean_value", (v: any) => (v == null ? null : Number(v === true || v === 1 || v === 1n || v === "true" || v === "1")));
+	db.function("boolean_value", (v: any) => {
+		if (v == null) return null;
+		if (typeof v !== "string") return Number(v !== 0 && v !== 0n && v !== false);
+		const input = v.trim().toLowerCase();
+		if (/^(t(r(u(e)?)?)?|y(e(s)?)?|on|1)$/.test(input)) return 1;
+		if (/^(f(a(l(s(e)?)?)?)?|n(o)?|of(f)?|0)$/.test(input)) return 0;
+		throw new Error("Invalid boolean value");
+	});
 	db.function("pg_like", (v: any, pattern: any, insensitive: any) => {
 		if (v == null || pattern == null) return null;
 		let regex = "^",
@@ -279,22 +162,15 @@ export function openSQLite(filename: string) {
 			regex += !escape && char === "%" ? ".*" : !escape && char === "_" ? "." : char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 			escape = false;
 		}
+		if (escape) throw new Error("LIKE pattern must not end with an escape character");
 		return Number(new RegExp(regex + "$", insensitive ? "isu" : "su").test(String(v)));
 	});
-	let tail: Promise<unknown> = Promise.resolve();
-	const context = new AsyncLocalStorage<{ active: boolean }>();
-	const enqueue = <T>(run: () => T | Promise<T>): Promise<T> => {
-		if (context.getStore()?.active) return Promise.resolve().then(run);
-		const next = tail.then(run);
-		tail = next.catch(() => {});
-		return next;
-	};
 	// Physical columns carry SQLite type metadata. Computed columns use the
 	// application's projection names to retain the same JS types as PostgreSQL.
-	function decode(row: any, query: string, columns: ReturnType<ReturnType<typeof db.query>["columns"]>) {
+	function decode(row: any, query: string, columns: ReturnType<ReturnType<typeof db.query>["columns"]>, fields: CompiledQuery["fields"]) {
 		for (const key in row) {
 			const v = row[key];
-			if (v === null) continue;
+			if (v === null || fields?.[key]) continue;
 			const type = columns.find((c) => c.name === key)?.type?.toLowerCase();
 			if (
 				type === "timestamptz" ||
@@ -319,88 +195,32 @@ export function openSQLite(filename: string) {
 		}
 		return row;
 	}
-	const compiled = new Map<string, string>();
-	const execute = (fragment: Fragment) =>
-		enqueue(() => {
-			let query = compiled.get(fragment.source);
-			if (!query) {
-				query = sqliteSQL(fragment.source);
-				if (compiled.size >= 200) compiled.delete(compiled.keys().next().value!);
-				compiled.set(fragment.source, query);
-			}
-			try {
-				const statement = db.query(query);
-				const params: Record<string, any> = {};
-				fragment.values.forEach((v, i) => {
-					params[String(i + 1)] = v instanceof Date ? v.getTime() : typeof v === "boolean" ? Number(v) : v === undefined ? null : v;
-				});
-				const rows = statement.all(params).map((row) => decode(row, query, statement.columns()));
-				return rows;
-			} catch (error: any) {
-				if (process.env.DB_DEBUG) console.error(query);
-				throw error;
-			}
-		});
-	function sql(first: any, ...values: any[]): any {
-		if (!Array.isArray(first) || !("raw" in first)) {
-			if (typeof first === "string") return new Fragment(quote(first), [], execute);
-			return { update: first };
-		}
-		let source = first[0];
-		const params: any[] = [];
-		for (let i = 0; i < values.length; i++) {
-			const value = values[i];
-			if (value instanceof Fragment) {
-				const offset = params.length;
-				source += value.source.replace(/'(?:''|[^'])*'|"(?:""|[^"])*"|\$(\d+)/g, (token, n) => (n ? `$${Number(n) + offset}` : token));
-				params.push(...value.values);
-			} else if (value?.update) {
-				const entries = Object.entries(value.update);
-				if (/\binsert\s+into\s+[\w".]+\s*$/i.test(source)) {
-					const names = entries.map(([k]) => quote(k));
-					const placeholders = entries.map(([, v]) => {
-						params.push(v);
-						return `$${params.length}`;
-					});
-					source += `(${names.join(", ")}) values (${placeholders.join(", ")})`;
-				} else
-					source += entries
-						.map(([k, v]) => {
-							params.push(v);
-							return `${quote(k)} = $${params.length}`;
-						})
-						.join(", ");
-			} else {
-				params.push(value);
-				source += `$${params.length}`;
-			}
-			source += first[i + 1];
-		}
-		return new Fragment(source, params, execute);
-	}
-	sql.array = (values: any[], type: string) => (/^(int8|bigint)$/i.test(type) ? JSON.stringify(values.map(String)) : JSON.stringify(values));
-	sql.unsafe = (source: string, values: any[] = []) => new Fragment(source, values, execute);
-	let savepoint = 0;
-	sql.begin = <T>(callback: (tx: typeof sql) => Promise<T>): Promise<T> =>
-		enqueue(() => {
-			const nested = !!context.getStore()?.active,
-				name = `xitter_${++savepoint}`;
-			const scope = { active: true };
-			return context.run(scope, async () => {
-				db.exec(nested ? `savepoint ${name}` : "begin immediate");
-				try {
-					const result = await callback(sql);
-					db.exec(nested ? `release ${name}` : "commit");
-					return result;
-				} catch (e) {
-					db.exec(nested ? `rollback to ${name}; release ${name}` : "rollback");
-					throw e;
-				} finally {
-					scope.active = false;
-				}
+	const execute = async ({ text: query, values, fields }: CompiledQuery) => {
+		try {
+			const statement = db.query(query);
+			const params: Record<string, any> = {};
+			values.forEach((v, i) => {
+				params[String(i + 1)] =
+					v instanceof ArrayValue
+						? JSON.stringify(/^(int8|bigint)$/i.test(v.type) ? v.values.map((item) => (item == null ? null : String(item))) : v.values)
+						: v instanceof Date
+							? v.getTime()
+							: typeof v === "boolean"
+								? Number(v)
+								: v === undefined
+									? null
+									: v;
 			});
-		});
-	sql.close = () => enqueue(() => db.close());
-	sql.end = sql.close;
-	return { sql, db, enqueue };
+			const columns = statement.columns();
+			return decodeFields(
+				statement.all(params).map((row) => decode(row, query, columns, fields)),
+				fields,
+			);
+		} catch (error) {
+			if (process.env.DB_DEBUG) console.error(query);
+			throw error;
+		}
+	};
+	const { driver, enqueue } = serialDriver(execute, async () => db.close());
+	return { sql: createSQL(driver, "sqlite"), db, enqueue, execute };
 }

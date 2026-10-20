@@ -19,7 +19,7 @@ async function session(username: string) {
 	const csrf = cookies.find((c) => c.startsWith("ct0="))?.slice(4);
 	if (!csrf) throw new Error(`login ${username} failed`);
 	const base = { cookie: cookies.join("; "), "x-csrf-token": csrf };
-	const id = (await sql`select id::text from users where lower(screen_name) = lower(${username})`)[0].id as string;
+	const id = (await sql`select ${sql.cast(sql`id`, "text")} as id from users where lower(screen_name) = lower(${username})`)[0].id as string;
 	const headers = (actAs?: string): Record<string, string> => ({ ...base, "content-type": "application/json", ...(actAs ? { "x-act-as-user-id": actAs, "x-contributor-version": "1" } : {}) });
 	return {
 		id,
@@ -45,8 +45,8 @@ async function session(username: string) {
 const owner = await session(ownerName);
 const member = await session(memberName);
 const other = await session(otherName);
-const saved = await sql`select id::text, delegation_invites, automated_by::text from users where id = any(${sql.array([owner.id, member.id, other.id], "BIGINT")})`;
-const clear = () => sql`delete from delegation_members where owner_id = any(${sql.array([owner.id, member.id, other.id], "BIGINT")})`;
+const saved = await sql`select ${sql.cast(sql`id`, "text")} as id, delegation_invites, ${sql.cast(sql`automated_by`, "text")} as automated_by from users where ${sql.contains(sql.array([owner.id, member.id, other.id], "BIGINT"), sql`id`)}`;
+const clear = () => sql`delete from delegation_members where ${sql.contains(sql.array([owner.id, member.id, other.id], "BIGINT"), sql`owner_id`)}`;
 await clear();
 const made: string[] = [];
 
@@ -56,7 +56,7 @@ try {
 	let r = await owner.gql("useAddMemberModalMutation_add_Mutation", { userId: member.id, delegationGroupId: owner.id, selectedRole: "Contributor" });
 	check(r.body.errors?.length, "an account that allows nobody can't be invited", r.body);
 	await member.gql("useDelegateMutation_settings_Mutation", { userId: member.id, invitationSetting: "OnlyFollowing" });
-	const follows = (await sql`select 1 from follows where follower_id = ${member.id}::bigint and followee_id = ${owner.id}::bigint`).length > 0;
+	const follows = (await sql`select 1 from follows where follower_id = ${sql.cast(member.id, "bigint")} and followee_id = ${sql.cast(owner.id, "bigint")}`).length > 0;
 	if (!follows) {
 		r = await owner.gql("useAddMemberModalMutation_add_Mutation", { userId: member.id, delegationGroupId: owner.id, selectedRole: "Contributor" });
 		check(r.body.errors?.length, "only-following refuses an account it doesn't follow", r.body);
@@ -90,7 +90,7 @@ try {
 	r = await member.gql("CreateTweet", { tweet_text: `delegate test ${Date.now()}` }, owner.id);
 	const postId = r.body.data?.create_tweet?.tweet_results?.result?.rest_id;
 	if (postId) made.push(postId);
-	const [author] = postId ? await sql`select user_id::text from posts where id = ${postId}::bigint` : [];
+	const [author] = postId ? await sql`select ${sql.cast(sql`user_id`, "text")} as user_id from posts where id = ${sql.cast(postId, "bigint")}` : [];
 	check(author?.user_id === owner.id, "a post made while switched is the account's", r.body);
 	r = await other.get("Viewer", {}, owner.id);
 	check(r.status === 403, "a non-member can't act as the account", r.status);
@@ -114,7 +114,7 @@ try {
 	check(r.body.errors?.length, "a Contributor can't invite", r.body);
 
 	// ---- Admins: Contributors only
-	await sql`update delegation_members set role = 'Admin' where owner_id = ${owner.id}::bigint and member_id = ${member.id}::bigint`;
+	await sql`update delegation_members set role = 'Admin' where owner_id = ${sql.cast(owner.id, "bigint")} and member_id = ${sql.cast(member.id, "bigint")}`;
 	await other.gql("useDelegateMutation_settings_Mutation", { userId: other.id, invitationSetting: "Everyone" });
 	r = await member.get("useFetchAnalyticsQuery", {}, owner.id);
 	check(r.status === 200, "an Admin sees post analytics", r.status);
@@ -134,11 +134,11 @@ try {
 
 	// ---- the owner changes roles; leaving; a suspended owner
 	r = await owner.gql("useChangeMemberRoleModalMutation_change_Mutation", { userId: self?.rest_id, selectedRole: "Contributor" });
-	const [role] = await sql`select role from delegation_members where id = ${self?.rest_id ?? "0"}::bigint`;
+	const [role] = await sql`select role from delegation_members where id = ${sql.cast(self?.rest_id ?? "0", "bigint")}`;
 	check(r.body.data?.delegationmembership_role_put === "Done" && role?.role === "Contributor", "the owner changes a role", r.body);
-	await sql`update users set status = 'suspended' where id = ${owner.id}::bigint`;
+	await sql`update users set status = 'suspended' where id = ${sql.cast(owner.id, "bigint")}`;
 	r = await member.get("Viewer", {}, owner.id);
-	await sql`update users set status = 'active' where id = ${owner.id}::bigint`;
+	await sql`update users set status = 'active' where id = ${sql.cast(owner.id, "bigint")}`;
 	check(r.status === 403, "nobody acts as a suspended account", r.status);
 	r = await member.gql("GroupMenuMutation", { membershipId: self?.rest_id });
 	check(r.body.data?.delegation_membership_delete, "the member leaves", r.body);
@@ -161,7 +161,7 @@ try {
 	r = await other.get("UserByScreenName", { screen_name: memberName });
 	const label = r.body.data?.user?.result?.affiliates_highlighted_label?.label;
 	check(label?.userLabelType === "AutomatedLabel" && label.longDescription?.text === `Automated by @${ownerName}`, "the profile reads Automated by", r.body.data?.user?.result?.affiliates_highlighted_label);
-	await sql`update users set automated_by = ${member.id}::bigint where id = ${other.id}::bigint`;
+	await sql`update users set automated_by = ${sql.cast(member.id, "bigint")} where id = ${sql.cast(other.id, "bigint")}`;
 	const res = await fetch(`${origin}/account/automation`, { method: "POST", headers: { cookie: owner.cookie }, body: new URLSearchParams({ csrf: owner.csrf, owner: otherName, password }), redirect: "manual" });
 	check(res.status === 400, "an automated account can't manage another", res.status);
 	r = await member.gql("DisableUserAccountLabel");
@@ -172,7 +172,7 @@ try {
 } finally {
 	for (const id of made) await owner.gql("DeleteTweet", { tweet_id: id });
 	await clear();
-	for (const s of saved) await sql`update users set delegation_invites = ${s.delegation_invites}, automated_by = ${s.automated_by}::bigint where id = ${s.id}::bigint`;
+	for (const s of saved) await sql`update users set delegation_invites = ${s.delegation_invites}, automated_by = ${sql.cast(s.automated_by, "bigint")} where id = ${sql.cast(s.id, "bigint")}`;
 }
 
 console.log(failed ? `${failed} failed` : "all passed");

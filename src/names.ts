@@ -113,8 +113,8 @@ export const forbiddenText = (...texts: string[]) => texts.some((t) => hasBlocke
 // An account that took a blocked name: suspended and signed out everywhere,
 // with a line in the audit log. Staff are left alone (the caller refuses).
 export async function suspendForName(userId: string, name: string) {
-	await sql`update users set status = 'suspended', status_until = null, status_restore = null, deactivated_at = null where id = ${userId}::bigint and role is null`;
-	const [member] = await sql`select 1 from users where id = ${userId}::bigint and role is null`;
+	await sql`update users set status = 'suspended', status_until = null, status_restore = null, deactivated_at = null where id = ${sql.cast(userId, "bigint")} and role is null`;
+	const [member] = await sql`select 1 from users where id = ${sql.cast(userId, "bigint")} and role is null`;
 	if (member) await shutOut(userId);
-	await sql`insert into audit_log (id, actor_id, action, target, detail) values (${newId()}::bigint, null, 'auto_suspend_name', ${userId}, ${JSON.stringify({ name })}::text::jsonb)`;
+	await sql`insert into audit_log (id, actor_id, action, target, detail) values (${sql.cast(newId(), "bigint")}, null, 'auto_suspend_name', ${userId}, ${sql.cast(JSON.stringify({ name }), "jsonb")})`;
 }

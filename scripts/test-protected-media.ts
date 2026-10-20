@@ -22,18 +22,18 @@ const ids = await Promise.all(["pm", "pf", "ps"].map((p) => createUser(`${p}${st
 const [owner, follower, stranger] = ids;
 const media: string[] = [];
 try {
-	await sql`update users set protected = true where id = ${owner}::bigint`;
-	await sql`insert into follows (follower_id, followee_id) values (${follower}::bigint, ${owner}::bigint)`;
+	await sql`update users set protected = true where id = ${sql.cast(owner, "bigint")}`;
+	await sql`insert into follows (follower_id, followee_id) values (${sql.cast(follower, "bigint")}, ${sql.cast(owner, "bigint")})`;
 	const post = newId();
-	await sql`insert into posts (id, user_id, text, conversation_id) values (${post}::bigint, ${owner}::bigint, 'pic', ${post}::bigint)`;
+	await sql`insert into posts (id, user_id, text, conversation_id) values (${sql.cast(post, "bigint")}, ${sql.cast(owner, "bigint")}, 'pic', ${sql.cast(post, "bigint")})`;
 	const openPost = newId();
-	await sql`insert into posts (id, user_id, text, conversation_id) values (${openPost}::bigint, ${stranger}::bigint, 'pic', ${openPost}::bigint)`;
+	await sql`insert into posts (id, user_id, text, conversation_id) values (${sql.cast(openPost, "bigint")}, ${sql.cast(stranger, "bigint")}, 'pic', ${sql.cast(openPost, "bigint")})`;
 	mkdirSync(dir, { recursive: true });
 	for (const [user, p] of [[owner, post], [stranger, openPost]]) {
 		const id = newId();
 		media.push(id);
 		writeFileSync(join(dir, id), Buffer.from("GIF89a"));
-		await sql`insert into media (id, user_id, kind, mime, size, width, height, post_id, position) values (${id}::bigint, ${user}::bigint, 'photo', 'image/gif', 6, 1, 1, ${p}::bigint, 0)`;
+		await sql`insert into media (id, user_id, kind, mime, size, width, height, post_id, position) values (${sql.cast(id, "bigint")}, ${sql.cast(user, "bigint")}, 'photo', 'image/gif', 6, 1, 1, ${sql.cast(p, "bigint")}, 0)`;
 	}
 	const [hidden, open] = media;
 	const get = async (who: string, id: string) => fetch(`${origin}/media/${id}.gif`, { headers: { cookie: await login(who) } });
@@ -48,7 +48,7 @@ try {
 	check("public media stays publicly cached", pub.status === 200 && pub.headers.get("cache-control")?.startsWith("public") === true, pub.headers.get("cache-control"));
 } finally {
 	for (const id of media) rmSync(join(dir, id), { force: true });
-	await sql`delete from users where id = any(${sql.array(ids, "INT8")})`;
+	await sql`delete from users where ${sql.contains(sql.array(ids, "INT8"), sql`id`)}`;
 }
 console.log(failures ? `${failures} FAILED` : "all passed");
 process.exit(failures ? 1 : 0);

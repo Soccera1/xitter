@@ -52,8 +52,8 @@ try {
 	const renamed = `${name}n`;
 	const changed = await s.post("/1.1/account/settings.json", { screen_name: renamed });
 	check("a free username is taken", changed.ok && (await changed.json()).screen_name === renamed);
-	const [row] = await sql`select screen_name from users where id = ${id}::bigint`;
-	check("and stored, with the change recorded", row.screen_name === renamed && (await sql`select 1 from username_changes where user_id = ${id}::bigint`).length === 1);
+	const [row] = await sql`select screen_name from users where id = ${sql.cast(id, "bigint")}`;
+	check("and stored, with the change recorded", row.screen_name === renamed && (await sql`select 1 from username_changes where user_id = ${sql.cast(id, "bigint")}`).length === 1);
 
 	const lang = await s.post("/1.1/account/settings.json", { lang: "ru" });
 	check("language is stored", (await lang.json()).language === "ru");
@@ -63,7 +63,7 @@ try {
 	check("a deactivated account is signed out", (await fetch(`${origin}/i/api/1.1/account/settings.json`, { headers: s.headers })).status !== 200);
 	s = (await signIn(renamed, "newpass456"))!;
 	check("signing in again brings it back", !!s);
-	const [back] = await sql`select status, deactivated_at from users where id = ${id}::bigint`;
+	const [back] = await sql`select status, deactivated_at from users where id = ${sql.cast(id, "bigint")}`;
 	check("active again", back.status === "active" && back.deactivated_at === null, back);
 } finally {
 	await sql`delete from users where screen_name in (${name}, ${other}, ${`${name}n`})`;

@@ -43,8 +43,8 @@ try {
 	console.log(`all passed (${checks})`);
 } finally {
 	for (const id of created) {
-		await sql`delete from posts where user_id = ${id}::bigint`;
-		await sql`delete from users where id = ${id}::bigint`;
+		await sql`delete from posts where user_id = ${sql.cast(id, "bigint")}`;
+		await sql`delete from users where id = ${sql.cast(id, "bigint")}`;
 	}
 	await sql.end();
 }

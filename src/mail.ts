@@ -14,7 +14,7 @@ export const mailEnabled = () => !!KEY;
 
 async function log(to: string, kind: string, subject: string, status: "sent" | "failed" | "skipped", error: string | null, userId?: string) {
 	await sql`insert into mail_log (id, user_id, to_addr, kind, subject, status, error)
-		values (${newId()}::bigint, ${userId ?? null}, ${to}, ${kind}, ${subject}, ${status}, ${error})`.catch(() => {});
+		values (${sql.cast(newId(), "bigint")}, ${userId ?? null}, ${to}, ${kind}, ${subject}, ${status}, ${error})`.catch(() => {});
 }
 
 export async function sendMail(to: string, subject: string, text: string, meta: { kind?: string; userId?: string } = {}): Promise<void> {

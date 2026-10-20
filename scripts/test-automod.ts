@@ -32,11 +32,11 @@ async function session(username: string) {
 		},
 	};
 }
-const standing = async (id: string) => (await sql`select status, status_until, status_restore from users where id = ${id}::bigint`)[0];
-const strikes = async (id: string) => (await sql`select count(*)::int as n from staff_messages where user_id = ${id}::bigint and kind = 'strike' and revoked_at is null`)[0].n;
+const standing = async (id: string) => (await sql`select status, status_until, status_restore from users where id = ${sql.cast(id, "bigint")}`)[0];
+const strikes = async (id: string) => (await sql`select ${sql.cast(sql`count(*)`, "int")} as n from staff_messages where user_id = ${sql.cast(id, "bigint")} and kind = 'strike' and revoked_at is null`)[0].n;
 const ageStrikes = async (id: string) => {
-	await sql`update staff_messages set created_at = created_at - interval '10 minutes' where user_id = ${id}::bigint`;
-	await sql`update audit_log set created_at = created_at - interval '10 minutes' where target = ${id}`;
+	await sql`update staff_messages set created_at = created_at - ${sql.duration(10, "minute")} where user_id = ${sql.cast(id, "bigint")}`;
+	await sql`update audit_log set created_at = created_at - ${sql.duration(10, "minute")} where target = ${id}`;
 };
 const tweet = (s: Awaited<ReturnType<typeof session>>, text: string) => s.gql("CreateTweet", { tweet_text: text });
 const created: string[] = [];
@@ -49,7 +49,7 @@ try {
 	const adminName = name("am_adm");
 	const adminId = await createUser(adminName, adminName, password);
 	created.push(adminId);
-	await sql`update users set role = 'admin' where id = ${adminId}::bigint`;
+	await sql`update users set role = 'admin' where id = ${sql.cast(adminId, "bigint")}`;
 	admin = await session(adminName);
 	check(admin.ok, "admin signs in");
 	check((await admin.admin("saveAutomod", { enabled: true, strike_days: 365, ladder: [0, 24, 168, -1], second_chances: 2 })).status === 200, "two second chances a week");
@@ -57,7 +57,7 @@ try {
 	const graceId = await createUser(graceName, graceName, password);
 	created.push(graceId);
 	const grace = await session(graceName);
-	const unread = async () => (await sql`select kind, body from staff_messages where user_id = ${graceId}::bigint and read_at is null order by id desc`) as any[];
+	const unread = async () => (await sql`select kind, body from staff_messages where user_id = ${sql.cast(graceId, "bigint")} and read_at is null order by id desc`) as any[];
 	check((await tweet(grace, "kys")).data.errors?.[0]?.code === 186, "an abusive post is refused");
 	check((await strikes(graceId)) === 0, "but the first one is a second chance, not a strike");
 	let notes = await unread();
@@ -107,12 +107,12 @@ try {
 	check(!(await session(userName)).ok, "a suspended account can't sign in");
 	check((await sql`select 1 from audit_log where action = 'escalate' and target = ${userId}`).length >= 1, "escalation in the audit log");
 
-	const due = await sql`insert into scheduled_posts (id, user_id, kind, execute_at, request) values (${Date.now()}::bigint, ${userId}::bigint, 'scheduled', now() - interval '1 minute', ${JSON.stringify({ status: "scheduled while suspended" })}::text::jsonb) returning id`;
+	const due = await sql`insert into scheduled_posts (id, user_id, kind, execute_at, request) values (${sql.cast(Date.now(), "bigint")}, ${sql.cast(userId, "bigint")}, 'scheduled', now() - ${sql.duration(1, "minute")}, ${sql.cast(JSON.stringify({ status: "scheduled while suspended" }), "jsonb")}) returning id`;
 	const { runDue } = await import("../src/scheduled");
 	await runDue();
-	check(!(await sql`select 1 from posts where user_id = ${userId}::bigint and text = 'scheduled while suspended'`).length && due.length, "a suspended account's scheduled post doesn't publish");
+	check(!(await sql`select 1 from posts where user_id = ${sql.cast(userId, "bigint")} and text = 'scheduled while suspended'`).length && due.length, "a suspended account's scheduled post doesn't publish");
 
-	await sql`update users set status_until = now() - interval '1 second' where id = ${userId}::bigint`;
+	await sql`update users set status_until = now() - ${sql.duration(1, "second")} where id = ${sql.cast(userId, "bigint")}`;
 	await expireSanctions();
 	s = await standing(userId);
 	check(s.status === "active" && !s.status_until && !s.status_restore, "the suspension runs out back to active");
@@ -125,7 +125,7 @@ try {
 	s = await standing(userId);
 	check(s.status === "suspended" && new Date(s.status_until).getTime() - Date.now() > 6 * 86400_000, "third strike suspends for a week");
 
-	await sql`update users set status_until = now() - interval '1 second' where id = ${userId}::bigint`;
+	await sql`update users set status_until = now() - ${sql.duration(1, "second")} where id = ${sql.cast(userId, "bigint")}`;
 	await expireSanctions();
 	user = await session(userName);
 	await ageStrikes(userId);
@@ -133,7 +133,7 @@ try {
 	check(rename.status === 400, "a slur username is refused");
 	s = await standing(userId);
 	check(s.status === "suspended" && !s.status_until, "fourth strike suspends for good");
-	await sql`update users set status_until = now() - interval '1 second' where id = ${userId}::bigint and status_until is not null`;
+	await sql`update users set status_until = now() - ${sql.duration(1, "second")} where id = ${sql.cast(userId, "bigint")} and status_until is not null`;
 	await expireSanctions();
 	check((await standing(userId)).status === "suspended", "a permanent suspension doesn't expire");
 
@@ -157,16 +157,16 @@ try {
 	const rId = await createUser(rName, rName, password);
 	created.push(rId);
 	const r = await session(rName);
-	await sql`update users set status = 'restricted' where id = ${rId}::bigint`;
+	await sql`update users set status = 'restricted' where id = ${sql.cast(rId, "bigint")}`;
 	check((await tweet(r, "can i post")).status === 403, "a restricted account can't post");
 	check((await r.gql("SendMessageCreateMutation", {})).status === 403, "or send DMs");
 	check((await r.form("/1.1/account/deactivate.json", { password })).status >= 400, "or deactivate its way out of the sanction");
-	await sql`update users set status = 'active' where id = ${rId}::bigint`;
+	await sql`update users set status = 'active' where id = ${sql.cast(rId, "bigint")}`;
 
 	const pName = name("am_api");
 	const pId = await createUser(pName, pName, password);
 	created.push(pId);
-	await sql`update users set email = 'evader.test@gmail.com' where id = ${pId}::bigint`;
+	await sql`update users set email = 'evader.test@gmail.com' where id = ${sql.cast(pId, "bigint")}`;
 	const p = await session(pName);
 	const { createToken } = await import("../src/public-api");
 	const apiToken = await createToken(pId, "test", "write");
@@ -174,7 +174,7 @@ try {
 	check((await me()).status === 200, "an API token works before the suspension");
 	const chatToken = (await p.gql("GenerateXChatTokenMutation", {})).data.data.user_get_x_chat_auth_token.token;
 	check((await fetch(`${origin}/xchat/ws?token=${chatToken}`)).status === 400, "its chat token opens a socket before the suspension");
-	await sql`insert into login_events (id, user_id, ip, app) values (${Date.now()}::bigint, ${pId}::bigint, '203.0.113.77', 'test')`;
+	await sql`insert into login_events (id, user_id, ip, app) values (${sql.cast(Date.now(), "bigint")}, ${sql.cast(pId, "bigint")}, '203.0.113.77', 'test')`;
 	const { createInvite, usernameState } = await import("../src/invites");
 	const invite = await createInvite({ createdBy: pId, maxUses: 5 });
 	check((await admin.admin("setStatus", { id: pId, status: "suspended", reason: "test" })).status === 200, "staff suspend the account");
@@ -182,7 +182,7 @@ try {
 	check((await me()).status === 401, "an API token issued before the suspension stops working");
 	check((await fetch(`${origin}/xchat/ws?token=${chatToken}`)).status === 403, "and so does a chat token");
 	check((await p.gql("CreateTweet", { tweet_text: "still here?" })).status === 401, "and the old session");
-	check((await sql`select 1 from sessions where user_id = ${pId}::bigint`).length === 0, "every session is gone");
+	check((await sql`select 1 from sessions where user_id = ${sql.cast(pId, "bigint")}`).length === 0, "every session is gone");
 	const { checkSignup, SignupError } = await import("../src/invites");
 	const signup = async (email: string, ip: string | null) => {
 		try {
@@ -244,8 +244,8 @@ try {
 	const oldId = await createUser(oldName, oldName, password);
 	created.push(oldId);
 	const oldPost = String(Date.now());
-	await sql`insert into posts (id, user_id, text, conversation_id) values (${oldPost}::bigint, ${oldId}::bigint, 'written before the automod: gas the jews', ${oldPost}::bigint)`;
-	await sql`update users set bio = 'k1ke hater' where id = ${oldId}::bigint`;
+	await sql`insert into posts (id, user_id, text, conversation_id) values (${sql.cast(oldPost, "bigint")}, ${sql.cast(oldId, "bigint")}, 'written before the automod: gas the jews', ${sql.cast(oldPost, "bigint")})`;
+	await sql`update users set bio = 'k1ke hater' where id = ${sql.cast(oldId, "bigint")}`;
 	const scan = await admin.admin("automodScan", {});
 	check(scan.data.hits.some((h: any) => h.kind === "post" && h.id === oldPost && h.category === "hate"), "the scan finds an older hateful post");
 	check(scan.data.hits.some((h: any) => h.kind === "profile" && h.id === oldId), "and an older hateful bio");
@@ -269,12 +269,12 @@ try {
 	else await setSetting("automod", saved);
 	for (const id of created) {
 		await sql`delete from audit_log where target = ${id}`;
-		await sql`delete from scheduled_posts where user_id = ${id}::bigint`;
-		await sql`delete from login_events where user_id = ${id}::bigint`;
-		await sql`delete from posts where user_id = ${id}::bigint`;
-		await sql`delete from retired_identities where user_id = ${id}::bigint`;
-		await sql`delete from invites where created_by = ${id}::bigint`;
-		await sql`delete from users where id = ${id}::bigint`;
+		await sql`delete from scheduled_posts where user_id = ${sql.cast(id, "bigint")}`;
+		await sql`delete from login_events where user_id = ${sql.cast(id, "bigint")}`;
+		await sql`delete from posts where user_id = ${sql.cast(id, "bigint")}`;
+		await sql`delete from retired_identities where user_id = ${sql.cast(id, "bigint")}`;
+		await sql`delete from invites where created_by = ${sql.cast(id, "bigint")}`;
+		await sql`delete from users where id = ${sql.cast(id, "bigint")}`;
 	}
 	await sql.end();
 }

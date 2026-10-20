@@ -15,7 +15,7 @@ export async function extraBadges(viewerId: string, url: URL): Promise<Response>
 	const names = [...new Set((url.searchParams.get("names") ?? "").split(",").map((n) => n.trim().toLowerCase()).filter((n) => STAFF_HANDLE.test(n)))].slice(0, 50);
 	const out: Record<string, { badges: { url: string; description: string }[]; gold: boolean }> = {};
 	if (names.length) {
-		const rows = await sql`select ${userCols(viewerId)} from users u where lower(u.screen_name) = any(${sql.array(names, "TEXT")})`;
+		const rows = await sql`select ${userCols(viewerId)} from users u where ${sql.contains(sql.array(names, "TEXT"), sql`lower(u.screen_name)`)}`;
 		for (const r of rows) {
 			const u = toUser(r);
 			const badges = badgeList(u).slice(labelTakesSlot(u) ? 0 : 1).map(({ url, description }) => ({ url, description }));

@@ -26,7 +26,7 @@ const cover = (url?: string) => ({
 const item = (r: { id: string; name: string; cover?: string }) => ({ __typename: "BookmarkCollection", id: r.id, name: r.name, media: cover(r.cover) });
 
 async function mine(viewerId: string, id: string) {
-	const [r] = await sql`select id::text, name from bookmark_folders where id = ${id}::bigint and user_id = ${viewerId}::bigint`;
+	const [r] = await sql`select ${sql.cast(sql`id`, "text")} as id, name from bookmark_folders where id = ${sql.cast(id, "bigint")} and user_id = ${sql.cast(viewerId, "bigint")}`;
 	if (!r) throw new PostError("That folder doesn't exist.", 144);
 	return r as { id: string; name: string };
 }
@@ -45,29 +45,29 @@ const coverUrl = (packed: string | null) => {
 
 export const bookmarkFolderHandlers = {
 	BookmarkFoldersSlice: async (v: Viewer) => {
-		const rows = await sql`select f.id::text, f.name,
-				(select m.id::text || ':' || m.kind || ':' || m.mime from bookmark_folder_posts fp join media m on m.post_id = fp.post_id
+		const rows = await sql`select ${sql.cast(sql`f.id`, "text")} as id, f.name,
+				(select ${sql.cast(sql`m.id`, "text")} || ':' || m.kind || ':' || m.mime from bookmark_folder_posts fp join media m on m.post_id = fp.post_id
 					where fp.folder_id = f.id order by fp.created_at desc, m.position limit 1) as cover
-			from bookmark_folders f where f.user_id = ${v.id}::bigint order by f.created_at`;
+			from bookmark_folders f where f.user_id = ${sql.cast(v.id, "bigint")} order by f.created_at`;
 		return { data: { viewer: { user_results: { result: { __typename: "User", bookmark_collections_slice: { items: rows.map((r: any) => item({ ...r, cover: coverUrl(r.cover) })), slice_info: { has_next_page: false } } } } } } };
 	},
 	createBookmarkFolder: async (v: Viewer, vars: Vars) => {
 		const name = cleanName(vars.name);
-		const [n] = await sql`select count(*)::int as n from bookmark_folders where user_id = ${v.id}::bigint`;
+		const [n] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from bookmark_folders where user_id = ${sql.cast(v.id, "bigint")}`;
 		if (n.n >= MAX_FOLDERS) throw new PostError("You have too many folders.", 214);
 		const id = newId();
-		await sql`insert into bookmark_folders (id, user_id, name) values (${id}::bigint, ${v.id}::bigint, ${name})`;
+		await sql`insert into bookmark_folders (id, user_id, name) values (${sql.cast(id, "bigint")}, ${sql.cast(v.id, "bigint")}, ${name})`;
 		return { data: { bookmark_collection_create: item({ id, name }) } };
 	},
 	EditBookmarkFolder: async (v: Viewer, vars: Vars) => {
 		const f = await mine(v.id, folderId(vars));
 		const name = cleanName(vars.name);
-		await sql`update bookmark_folders set name = ${name} where id = ${f.id}::bigint`;
+		await sql`update bookmark_folders set name = ${name} where id = ${sql.cast(f.id, "bigint")}`;
 		return { data: { bookmark_collection_update: item({ id: f.id, name }) } };
 	},
 	DeleteBookmarkFolder: async (v: Viewer, vars: Vars) => {
 		const f = await mine(v.id, folderId(vars));
-		await sql`delete from bookmark_folders where id = ${f.id}::bigint`;
+		await sql`delete from bookmark_folders where id = ${sql.cast(f.id, "bigint")}`;
 		return { data: { bookmark_collection_delete: "Done" } };
 	},
 	bookmarkTweetToFolder: async (v: Viewer, vars: Vars) => {
@@ -76,7 +76,7 @@ export const bookmarkFolderHandlers = {
 		if (!isId(raw)) throw new PostError("Invalid post id.", 144);
 		const post = await originalPostId(raw);
 		await setMark("bookmarks", v.id, post, true);
-		await sql`insert into bookmark_folder_posts (folder_id, post_id) values (${f.id}::bigint, ${post}::bigint) on conflict do nothing`;
+		await sql`insert into bookmark_folder_posts (folder_id, post_id) values (${sql.cast(f.id, "bigint")}, ${sql.cast(post, "bigint")}) on conflict do nothing`;
 		return { data: { bookmark_collection_tweet_put: "Done" } };
 	},
 	RemoveTweetFromBookmarkFolder: async (v: Viewer, vars: Vars) => {
@@ -84,7 +84,7 @@ export const bookmarkFolderHandlers = {
 		const raw = String(vars.tweet_id ?? "");
 		if (!isId(raw)) throw new PostError("Invalid post id.", 144);
 		const post = await originalPostId(raw);
-		await sql`delete from bookmark_folder_posts where folder_id = ${f.id}::bigint and post_id = ${post}::bigint`;
+		await sql`delete from bookmark_folder_posts where folder_id = ${sql.cast(f.id, "bigint")} and post_id = ${sql.cast(post, "bigint")}`;
 		return { data: { bookmark_collection_tweet_delete: "Done" } };
 	},
 	BookmarkFolderTimeline: async (v: Viewer, vars: Vars) => {

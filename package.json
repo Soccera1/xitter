@@ -9,10 +9,16 @@
 		"test:sqlite": "bun test scripts/sqlite.test.ts",
 		"har:extract": "bun scripts/har-extract.ts",
 		"client:fetch": "bun scripts/fetch-client.ts",
-		"test:databases": "bun test ./scripts/schema-sync.test.ts ./scripts/sqlite.test.ts"
+		"check:queries": "bun scripts/check-queries.ts",
+		"typecheck": "tsc --noEmit",
+		"test:unit": "bun test ./scripts/test-thrift.ts ./scripts/test-request-ip.ts ./scripts/test-links.ts ./scripts/test-push-crypto.ts ./scripts/test-hate.ts ./scripts/test-branding.ts ./scripts/test-chat-token.ts",
+		"check": "bun run typecheck && bun run test:unit && bun run test:databases",
+		"test:backends": "bun scripts/test-backends.ts",
+		"test:databases": "bun run check:queries && bun test ./scripts/schema-sync.test.ts ./scripts/sqlite.test.ts ./scripts/query.test.ts && bun run test:backends"
 	},
 	"devDependencies": {
-		"@types/bun": "latest"
+		"@types/bun": "latest",
+		"typescript": "5.9.3"
 	},
 	"dependencies": {
 		"emusks": "^2.3.19"

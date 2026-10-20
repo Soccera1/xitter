@@ -33,8 +33,8 @@ function check(label: string, ok: boolean, detail: unknown = "") {
 
 const staff = await session(adminName);
 const sender = await session(fromName);
-const [to] = await sql`select id::text, email, email_settings, last_seen_at, notifications_seen_at, activity_mailed_at, messages_mailed_at from users where screen_name = ${toName}`;
-const [from] = await sql`select id::text from users where screen_name = ${fromName}`;
+const [to] = await sql`select ${sql.cast(sql`id`, "text")} as id, email, email_settings, last_seen_at, notifications_seen_at, activity_mailed_at, messages_mailed_at from users where screen_name = ${toName}`;
+const [from] = await sql`select ${sql.cast(sql`id`, "text")} as id from users where screen_name = ${fromName}`;
 const mail = `mail-test-${Date.now()}@example.test`;
 const testTo = `admin-test-${Date.now()}@example.test`;
 const postId = newId();
@@ -49,12 +49,12 @@ try {
 	check("a test mail is tried and logged", status.enabled ? test.status === 200 || test.status === 400 : test.status === 400 && logged?.status === "skipped", { test, logged });
 	check("a plain account can't send one", (await sender.admin("sendTestMail", { to: testTo })).status === 403);
 
-	await sql`update users set email = ${mail}, email_settings = email_settings || '{"send_network_activity_email": true, "send_new_direct_text_email": true}'::jsonb,
-		last_seen_at = now() - interval '2 hours', notifications_seen_at = now() - interval '2 hours', activity_mailed_at = null, messages_mailed_at = null where id = ${to.id}::bigint`;
-	await sql`insert into posts (id, user_id, text, conversation_id) values (${postId}::bigint, ${to.id}::bigint, 'mail test post', ${postId}::bigint)`;
+	await sql`update users set email = ${mail}, email_settings = ${sql.jsonMerge(sql`email_settings`, sql.cast(sql`'{"send_network_activity_email": true, "send_new_direct_text_email": true}'`, "jsonb"))},
+		last_seen_at = now() - ${sql.duration(2, "hour")}, notifications_seen_at = now() - ${sql.duration(2, "hour")}, activity_mailed_at = null, messages_mailed_at = null where id = ${sql.cast(to.id, "bigint")}`;
+	await sql`insert into posts (id, user_id, text, conversation_id) values (${sql.cast(postId, "bigint")}, ${sql.cast(to.id, "bigint")}, 'mail test post', ${sql.cast(postId, "bigint")})`;
 	await sender.gql("FavoriteTweet", { tweet_id: postId });
-	await sql`insert into chat_members (conversation_id, user_id) values (${conv}, ${to.id}::bigint), (${conv}, ${from.id}::bigint) on conflict do nothing`;
-	await sql`insert into chat_events (seq, conversation_id, sender_id, kind, event) values (${newId()}::bigint, ${conv}, ${from.id}::bigint, 1, ${Buffer.from([0])})`;
+	await sql`insert into chat_members (conversation_id, user_id) values (${conv}, ${sql.cast(to.id, "bigint")}), (${conv}, ${sql.cast(from.id, "bigint")}) on conflict do nothing`;
+	await sql`insert into chat_events (seq, conversation_id, sender_id, kind, event) values (${sql.cast(newId(), "bigint")}, ${conv}, ${sql.cast(from.id, "bigint")}, 1, ${Buffer.from([0])})`;
 
 	await staff.admin("runMailDigests");
 	let got = await mails();
@@ -63,20 +63,20 @@ try {
 	await staff.admin("runMailDigests");
 	check("not twice in a row", (await mails()).length === got.length);
 
-	await sql`update users set activity_mailed_at = null, messages_mailed_at = null, last_seen_at = now() where id = ${to.id}::bigint`;
+	await sql`update users set activity_mailed_at = null, messages_mailed_at = null, last_seen_at = now() where id = ${sql.cast(to.id, "bigint")}`;
 	await staff.admin("runMailDigests");
 	check("nothing while the account is around", (await mails()).length === got.length);
 
-	await sql`update users set last_seen_at = now() - interval '2 hours', email_settings = email_settings || '{"send_network_activity_email": false, "send_new_direct_text_email": false}'::jsonb where id = ${to.id}::bigint`;
+	await sql`update users set last_seen_at = now() - ${sql.duration(2, "hour")}, email_settings = ${sql.jsonMerge(sql`email_settings`, sql.cast(sql`'{"send_network_activity_email": false, "send_new_direct_text_email": false}'`, "jsonb"))} where id = ${sql.cast(to.id, "bigint")}`;
 	await staff.admin("runMailDigests");
 	check("nor once the settings are off", (await mails()).length === got.length);
 } finally {
 	await sender.gql("UnfavoriteTweet", { tweet_id: postId });
-	await sql`delete from posts where id = ${postId}::bigint`;
+	await sql`delete from posts where id = ${sql.cast(postId, "bigint")}`;
 	await sql`delete from chat_events where conversation_id = ${conv}`;
 	await sql`delete from chat_members where conversation_id = ${conv}`;
-	await sql`update users set email = ${to.email}, email_settings = ${JSON.stringify(to.email_settings)}::text::jsonb, last_seen_at = ${to.last_seen_at},
-		notifications_seen_at = ${to.notifications_seen_at}, activity_mailed_at = ${to.activity_mailed_at}, messages_mailed_at = ${to.messages_mailed_at} where id = ${to.id}::bigint`;
+	await sql`update users set email = ${to.email}, email_settings = ${sql.cast(JSON.stringify(to.email_settings), "jsonb")}, last_seen_at = ${to.last_seen_at},
+		notifications_seen_at = ${to.notifications_seen_at}, activity_mailed_at = ${to.activity_mailed_at}, messages_mailed_at = ${to.messages_mailed_at} where id = ${sql.cast(to.id, "bigint")}`;
 	await sql`delete from mail_log where to_addr in (${mail}, ${testTo})`;
 }
 

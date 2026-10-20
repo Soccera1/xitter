@@ -1,3 +1,4 @@
+import type { Fragment } from "./db/query";
 // Sign-up by invite. Codes come from scripts/invite.ts for now and from the
 // admin panel later. A code is spent in the same transaction that creates the
 // account, so two people can't both use its last use.
@@ -24,7 +25,7 @@ export const normalizeCode = (code: string) => code.trim().toUpperCase().replace
 export async function createInvite(opts: { createdBy?: string; maxUses?: number; expiresAt?: Date; orgId?: string } = {}): Promise<string> {
 	const code = newCode();
 	await sql`insert into invites (code, created_by, max_uses, expires_at, org_id)
-		values (${code}, ${opts.createdBy ?? null}::bigint, ${opts.maxUses ?? 1}, ${opts.expiresAt ?? null}, ${opts.orgId ?? null}::bigint)`;
+		values (${code}, ${sql.cast(opts.createdBy ?? null, "bigint")}, ${opts.maxUses ?? 1}, ${opts.expiresAt ?? null}, ${sql.cast(opts.orgId ?? null, "bigint")})`;
 	return code;
 }
 
@@ -66,24 +67,24 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 type SignupForm = { code: string; screenName: string; name: string; password: string; email: string; flag?: string; ip?: string | null };
 
-const CANONICAL_EMAIL = (column: ReturnType<typeof sql>) => sql`case when split_part(lower(${column}), '@', 2) in ('gmail.com', 'googlemail.com')
+const CANONICAL_EMAIL = (column: Fragment) => sql`case when split_part(lower(${column}), '@', 2) in ('gmail.com', 'googlemail.com')
 	then replace(regexp_replace(split_part(lower(${column}), '@', 1), '[+].*$', ''), '.', '') || '@gmail.com'
 	else regexp_replace(split_part(lower(${column}), '@', 1), '[+].*$', '') || '@' || split_part(lower(${column}), '@', 2) end`;
 
 const SUSPENDED_MEMBER = sql`u.status = 'suspended' and u.deactivated_at is null and u.role is null`;
 
 export async function evadedSuspension(email: string, ip: string | null | undefined): Promise<{ user: string; by: "email" | "address" } | undefined> {
-	const [byEmail] = await sql`select u.id::text from users u where ${SUSPENDED_MEMBER} and u.email is not null
-		and ${CANONICAL_EMAIL(sql`u.email`)} = ${CANONICAL_EMAIL(sql`${email}::text`)} limit 1`;
+	const [byEmail] = await sql`select ${sql.cast(sql`u.id`, "text")} as id from users u where ${SUSPENDED_MEMBER} and u.email is not null
+		and ${CANONICAL_EMAIL(sql`u.email`)} = ${CANONICAL_EMAIL(sql.cast(email, "text"))} limit 1`;
 	if (byEmail) return { user: byEmail.id, by: "email" };
-	const [retiredEmail] = await sql`select user_id::text from retired_identities where kind = 'email'
-		and ${CANONICAL_EMAIL(sql`value`)} = ${CANONICAL_EMAIL(sql`${email}::text`)} limit 1`;
+	const [retiredEmail] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id from retired_identities where kind = 'email'
+		and ${CANONICAL_EMAIL(sql`value`)} = ${CANONICAL_EMAIL(sql.cast(email, "text"))} limit 1`;
 	if (retiredEmail) return { user: retiredEmail.user_id ?? "", by: "email" };
 	if (!ip) return undefined;
-	const [retiredIp] = await sql`select user_id::text from retired_identities where kind = 'ip' and value = ${ip} and created_at > now() - interval '30 days'`;
+	const [retiredIp] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id from retired_identities where kind = 'ip' and value = ${ip} and created_at > now() - ${sql.duration(30, "day")}`;
 	if (retiredIp) return { user: retiredIp.user_id ?? "", by: "address" };
-	const [byIp] = await sql`select u.id::text from login_events e join users u on u.id = e.user_id
-		where e.ip = ${ip} and e.created_at > now() - interval '30 days' and ${SUSPENDED_MEMBER} limit 1`;
+	const [byIp] = await sql`select ${sql.cast(sql`u.id`, "text")} as id from login_events e join users u on u.id = e.user_id
+		where e.ip = ${ip} and e.created_at > now() - ${sql.duration(30, "day")} and ${SUSPENDED_MEMBER} limit 1`;
 	return byIp ? { user: byIp.id, by: "address" } : undefined;
 }
 
@@ -108,8 +109,8 @@ export async function checkSignup(f: SignupForm) {
 	if ((await sql`select 1 from users where lower(email) = ${email}`).length) throw new SignupError("That email is already used by another account.");
 	const evaded = await evadedSuspension(email, f.ip);
 	if (evaded) {
-		await sql`insert into audit_log (id, actor_id, action, target, detail) values (${newId()}::bigint, null, 'evasion_signup_refused', ${evaded.user},
-			${JSON.stringify({ by: evaded.by, screen_name: screenName, ip: f.ip ?? null })}::text::jsonb)`;
+		await sql`insert into audit_log (id, actor_id, action, target, detail) values (${sql.cast(newId(), "bigint")}, null, 'evasion_signup_refused', ${evaded.user},
+			${sql.cast(JSON.stringify({ by: evaded.by, screen_name: screenName, ip: f.ip ?? null }), "jsonb")})`;
 		throw new SignupError("Sign-up isn't available for you right now. If you think this is a mistake, contact this instance's staff.");
 	}
 	return { email, screenName, name };
@@ -141,14 +142,14 @@ export async function signUp(
 						and not exists (select 1 from users c where c.id = invites.created_by and c.status = 'suspended' and c.deactivated_at is null) returning code, org_id`;
 		if (!invite && !(mode === "open" && !code)) throw new SignupError("That invite code is not valid or has been used up.");
 		await tx`insert into users (id, screen_name, name, password_hash, invite_code, flag, email, email_verified, signup_source, signup_country)
-			values (${id}::bigint, ${screenName}, ${name}, ${hash}, ${invite ? code : null}, ${flag}, ${email}, ${!!f.emailVerified}, ${f.source ?? null}, ${f.country ?? null})`;
+			values (${tx.cast(id, "bigint")}, ${screenName}, ${name}, ${hash}, ${invite ? code : null}, ${flag}, ${email}, ${!!f.emailVerified}, ${f.source ?? null}, ${f.country ?? null})`;
 		// an organisation's invite makes the new account its affiliate
-		if (invite?.org_id) await tx`insert into affiliations (org_id, user_id) values (${invite.org_id}::bigint, ${id}::bigint)`;
+		if (invite?.org_id) await tx`insert into affiliations (org_id, user_id) values (${tx.cast(invite.org_id, "bigint")}, ${tx.cast(id, "bigint")})`;
 		// the accounts the admin panel says everyone starts out following
 		const follows = settings().default_follows.map((h) => h.toLowerCase());
 		if (follows.length)
 			await tx`insert into follows (follower_id, followee_id)
-				select ${id}::bigint, u.id from users u where lower(u.screen_name) = any(${sql.array(follows, "TEXT")}) and u.status <> 'suspended'
+				select ${tx.cast(id, "bigint")}, u.id from users u where ${tx.contains(sql.array(follows, "TEXT"), tx`lower(u.screen_name)`)} and u.status <> 'suspended'
 				on conflict do nothing`;
 	});
 	return id;

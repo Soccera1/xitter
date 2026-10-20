@@ -75,7 +75,7 @@ try {
 	s = await step("login_enter_password", { username: name, password: "testpass123" });
 	check("then the password is enough again", s.cookies.some((c) => c.startsWith("auth_token=")));
 } finally {
-	await sql`delete from users where id = ${id}::bigint`;
+	await sql`delete from users where id = ${sql.cast(id, "bigint")}`;
 }
 console.log(failures ? `${failures} FAILED` : "all passed");
 process.exit(failures ? 1 : 0);

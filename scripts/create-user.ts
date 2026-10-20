@@ -12,7 +12,7 @@ if (!screenName || !password) {
 await migrate();
 try {
 	const id = await createUser(screenName, name || screenName, password);
-	if (badge) await sql`update users set verified_type = ${badge} where id = ${id}::bigint`;
+	if (badge) await sql`update users set verified_type = ${badge} where id = ${sql.cast(id, "bigint")}`;
 	console.log(`created @${screenName} (${id})${badge ? ` with ${badge} badge` : ""}`);
 } catch (e: any) {
 	console.error(/users_screen_name_key/.test(String(e?.message)) ? `@${screenName} is already taken` : (e?.message ?? e));

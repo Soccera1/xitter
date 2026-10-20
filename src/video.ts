@@ -97,7 +97,7 @@ async function convert(dir: string, id: string) {
 	const fail = async (message: string) => {
 		if (errors.size >= MAX_VIDEO_ERRORS) errors.delete(errors.keys().next().value!);
 		errors.set(id, message);
-		await sql`update media set state = 'failed' where id = ${id}::bigint`;
+		await sql`update media set state = 'failed' where id = ${sql.cast(id, "bigint")}`;
 	};
 	try {
 		const info = await probe(src);
@@ -122,7 +122,7 @@ async function convert(dir: string, id: string) {
 		renameSync(tmp, join(dir, id));
 		const size = Bun.file(join(dir, id)).size;
 		await sql`update media set state = 'ready', mime = 'video/mp4', size = ${size}, width = ${out.width}, height = ${out.height},
-			duration_ms = ${Math.round(out.seconds * 1000)} where id = ${id}::bigint`;
+			duration_ms = ${Math.round(out.seconds * 1000)} where id = ${sql.cast(id, "bigint")}`;
 	} catch (e) {
 		console.log(`video ${id} failed:`, e);
 		await fail("The video could not be processed.");
@@ -171,6 +171,6 @@ export async function resumeVideos(dir: string) {
 	for (const r of rows) {
 		const id = String(r.id);
 		if (existsSync(sourceFile(dir, id))) queueVideo(dir, id);
-		else await sql`update media set state = 'failed' where id = ${id}::bigint`;
+		else await sql`update media set state = 'failed' where id = ${sql.cast(id, "bigint")}`;
 	}
 }

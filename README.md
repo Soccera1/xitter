@@ -192,9 +192,79 @@ infer data transformations from schema changes.
 
 `bun run test:databases` tests real v1 upgrades, row/counter/foreign-key preservation,
 failed-upgrade rollback, index and constraint edits, and one-time data migrations.
+It also checks query portability, runs shared query contracts, and starts disposable
+servers to run the same feature tests on both databases.
 Set `TEST_POSTGRES_URL` to a disposable PostgreSQL instance whose role may create
 test databases to run the same tests on both engines; without it the PostgreSQL
 cases are skipped. CI supplies PostgreSQL and requires both backends to pass.
+Before submitting changes, run `bun run check`: it runs the full application type
+check, unit tests, migration/query contracts, portability checks, and feature
+tests. Set `TEST_POSTGRES_URL` to include PostgreSQL locally; CI always sets it.
+
+### Writing database queries
+
+Application code uses the small shared `sql` interface from `src/db.ts`. It binds
+values, quotes identifiers, and compiles structured fragments for the selected
+backend. There is no runtime PostgreSQL-to-SQLite SQL rewriting and no production
+ORM dependency. Plain SQL stays readable; operations that differ between engines
+use shared helpers:
+
+```ts
+const rows = await sql`select id, screen_name from users
+  where ${sql.contains(sql.array(ids, "INT8"), sql`id`)}
+  and ${sql.like(sql`screen_name`, `${prefix}%`, true)}`;
+```
+
+Use `sql.cast`, `sql.duration`, `sql.epoch`, `sql.contains`, `sql.like`, `sql.regex`,
+and the JSON/aggregate helpers instead of backend syntax. `sql("column")` quotes
+an identifier; `sql({ field: value })` builds an UPDATE assignment list, and
+`sql.insert({ field: value })` builds INSERT columns and values. Transactions use
+`sql.begin(async tx => ...)`, with `tx.begin(...)` for nested savepoints. Use `tx`
+for every query participating in a transaction.
+
+Physical columns retain their types. For a computed result, declare its JavaScript
+type with `sql.project(expression, alias, type)` so new aliases need no backend
+decoder changes. Supported result types are `boolean`, `date`, `json`, `text`,
+`number`, and `bigint` (decimal string):
+
+```ts
+const [row] = await sql`select
+  ${sql.project(sql`exists (select 1 from likes where post_id = ${sql.cast(id, "bigint")})`, "has_likes", "boolean")}`;
+```
+
+JSON helpers preserve scalar values as well as objects and arrays. Use a string
+array for a JSON update path:
+
+```ts
+sql.jsonSet(sql`preferences`, ["explore", "place"], sql.cast(JSON.stringify(place), "jsonb"));
+```
+
+Computed booleans and JSON expressions retain their types when nested inside
+`sql.jsonObject`, and drivers decode declared result fields once.
+
+`bun run check:queries` rejects backend syntax, unregistered SQL functions, and raw
+SQL escape hatches in application modules. New backend operations belong in
+`src/db/query.ts`, with a contract in `scripts/query.test.ts`; application features
+then call that operation once. TypeScript is used only by development checks and
+does not add a server dependency. Backend contracts cover exact bigint bindings,
+JSON, nulls, Unicode matching, time arithmetic, result types, and transactions.
+PostgreSQL matching uses its built-in `pg_c_utf8` collation; PostgreSQL 17 or newer
+is required (Compose and CI use 18).
+
+SQLite owns its native connection in a dedicated worker. Queries, schema upgrades,
+snapshots, and size checks run there; a long query does not block the HTTP event
+loop. Transactions hold the connection queue across awaits and exclude unrelated
+requests until commit or rollback. SQLite still serializes database work through
+that connection, so database throughput and locking behavior differ from a
+PostgreSQL pool. CI checks worker responsiveness and transaction isolation.
+
+The feature runner (`bun run test:backends`) uses temporary databases and data/media
+directories, covering polls, notifications, analytics, blocks, lists, communities,
+edits, views, ranking, search, contacts, trends, account settings, delegation,
+threads, chat, topics, admin operations, and community notes. Its client metadata
+fixture needs no downloaded client bundle. Maintainers run the same command
+for either backend; backend implementation changes and compatibility fixes stay in
+the database layer. Native diagnostics and migration SQL remain backend-specific.
 
 ### With Docker Compose
 

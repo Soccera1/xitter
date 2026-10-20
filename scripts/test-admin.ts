@@ -42,8 +42,8 @@ const userIds = (timeline: any) => entriesOf(timeline).map((e) => e.content?.ite
 const a = (await session(adminName))!;
 let t = (await session(targetName))!;
 const o = (await session(orgName))!;
-const [target] = await sql`select id::text as id, role, status from users where lower(screen_name) = lower(${targetName})`;
-const [org] = await sql`select id::text as id from users where lower(screen_name) = lower(${orgName})`;
+const [target] = await sql`select ${sql.cast(sql`id`, "text")} as id, role, status from users where lower(screen_name) = lower(${targetName})`;
+const [org] = await sql`select ${sql.cast(sql`id`, "text")} as id from users where lower(screen_name) = lower(${orgName})`;
 
 // access
 check("the panel opens for staff", (await a.page("/admin")).status === 200);
@@ -58,11 +58,11 @@ await a.admin("setRole", { id: target.id, role: "moderator" });
 t = (await session(targetName))!;
 check("a moderator can open the panel", (await t.admin("me")).role === "moderator");
 check("but can't edit profiles", (await t.admin("updateUser", { id: org.id, name: "x" })).status === 403);
-const [adminRow] = await sql`select id::text as id from users where lower(screen_name) = lower(${adminName})`;
+const [adminRow] = await sql`select ${sql.cast(sql`id`, "text")} as id from users where lower(screen_name) = lower(${adminName})`;
 check("or suspend an admin", (await t.admin("setStatus", { id: adminRow.id, status: "suspended" })).status === 403);
 await a.admin("setRole", { id: target.id, role: target.role });
 // with other admins about (a real one on a dev instance), stepping down would succeed and lock the test out
-const [{ admins }] = await sql`select count(*)::int as admins from users where role = 'admin'`;
+const [{ admins }] = await sql`select ${sql.cast(sql`count(*)`, "int")} as admins from users where role = 'admin'`;
 if (admins === 1) check("the last admin can't step down", (await a.admin("setRole", { id: adminRow.id, role: null })).status === 400);
 else console.log(`skip the last admin can't step down (${admins} admins)`);
 
@@ -169,7 +169,7 @@ check("non-staff can't close reports", (await t.admin("resolveReport", { id: rep
 await a.admin("resolveReport", { id: report?.id, status: "dismissed", note: "test" });
 check("closing moves it out of the open queue", !(await a.admin("reports")).reports?.some((r: any) => r.id === report?.id));
 await o.gql("DeleteTweet", { tweet_id: reported });
-await sql`delete from reports where id = ${report?.id ?? 0}::bigint`;
+await sql`delete from reports where id = ${sql.cast(report?.id ?? 0, "bigint")}`;
 
 // instance settings
 const before = (await a.admin("settings")).settings;
@@ -183,7 +183,7 @@ check("the rules page shows the rules", rules.includes("Be kind.") && rules.incl
 const { codes: [followCode] } = await a.admin("createInvite", {});
 const followName = `fol${Date.now() % 1e8}`;
 await signup({ code: followCode, username: followName });
-check("new accounts follow the default accounts", (await sql`select 1 from follows f join users u on u.id = f.follower_id join users o on o.id = f.followee_id where u.screen_name = ${followName} and o.id = ${org.id}::bigint`).length === 1);
+check("new accounts follow the default accounts", (await sql`select 1 from follows f join users u on u.id = f.follower_id join users o on o.id = f.followee_id where u.screen_name = ${followName} and o.id = ${sql.cast(org.id, "bigint")}`).length === 1);
 await sql`delete from users where screen_name = ${followName}`;
 await sql`delete from invites where code = ${followCode}`;
 const png = await Bun.file("public/favicon.png").bytes();
@@ -196,7 +196,7 @@ await a.admin("saveSettings", { announcement: before.announcement, features: bef
 // posts, passwords, audit
 check("posts can be found", (await a.admin("posts", { author: targetName })).posts?.some((p: any) => p.id === post));
 await a.admin("deletePost", { id: post });
-check("and deleted", (await sql`select 1 from posts where id = ${post}::bigint`).length === 0);
+check("and deleted", (await sql`select 1 from posts where id = ${sql.cast(post, "bigint")}`).length === 0);
 const reset = await a.admin("resetPassword", { id: target.id });
 check("a password reset gives a working password", !!(await session(targetName, reset.password)));
 const log = (await a.admin("audit")).entries ?? [];
@@ -223,7 +223,7 @@ check("the audit log records it all", ["set_status", "add_affiliate", "delete_po
 }
 
 // a second admin: the owner (the first admin) outranks them, not the other way round
-const ownerFirst = (await sql`select id::text from users where role = 'admin' order by created_at, id limit 1`)[0]?.id === adminRow.id;
+const ownerFirst = (await sql`select ${sql.cast(sql`id`, "text")} as id from users where role = 'admin' order by created_at, id limit 1`)[0]?.id === adminRow.id;
 if (ownerFirst) {
 	await a.admin("setRole", { id: org.id, role: "admin" });
 	const o2 = (await session(orgName))!;
@@ -235,9 +235,9 @@ if (ownerFirst) {
 } else console.log(`skip owner checks: ${adminName} isn't the first admin`);
 
 // put things back
-await sql`update users set password_hash = ${await Bun.password.hash(password)} where id = ${target.id}::bigint`;
-await sql`delete from users where screen_name like ${`${name}%`}`;
-await sql`delete from invites where code = any(${sql.array([codes[0], revoked], "TEXT")})`;
+await sql`update users set password_hash = ${await Bun.password.hash(password)} where id = ${sql.cast(target.id, "bigint")}`;
+await sql`delete from users where ${sql.like(sql`screen_name`, `${name}%`, false)}`;
+await sql`delete from invites where ${sql.contains(sql.array([codes[0], revoked], "TEXT"), sql`code`)}`;
 await sql.close();
 console.log(failures ? `${failures} failed` : "all passed");
 process.exit(failures ? 1 : 0);

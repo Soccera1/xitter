@@ -42,7 +42,7 @@ const post = async (text: string) => {
 	posts.push(id);
 	return id;
 };
-const source = async (id: string) => (await sql`select source from posts where id = ${id}::bigint`)[0].source;
+const source = async (id: string) => (await sql`select source from posts where id = ${sql.cast(id, "bigint")}`)[0].source;
 
 try {
 	check((await admin.admin("saveSettings", { instance_name: "Bad {name}" })).status === 400, "ICU syntax refused in the name");

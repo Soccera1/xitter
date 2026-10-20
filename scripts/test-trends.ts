@@ -15,14 +15,14 @@ const person = async (ip: string, ageDays = 30) => {
 	const name = `tr${created.length}_${stamp}`;
 	const id = await createUser(name, name, "testpass123");
 	created.push(id);
-	await sql`update users set created_at = now() - make_interval(days => ${ageDays}) where id = ${id}::bigint`;
-	await sql`insert into login_events (id, user_id, ip, app) values (${newId()}::bigint, ${id}::bigint, ${ip}, 'test')`;
+	await sql`update users set created_at = now() - ${sql.duration(ageDays, "day")} where id = ${sql.cast(id, "bigint")}`;
+	await sql`insert into login_events (id, user_id, ip, app) values (${sql.cast(newId(), "bigint")}, ${sql.cast(id, "bigint")}, ${ip}, 'test')`;
 	return id;
 };
 const post = async (userId: string, text: string, times = 1) => {
 	for (let i = 0; i < times; i++) {
 		const id = newId();
-		await sql`insert into posts (id, user_id, text, conversation_id) values (${id}::bigint, ${userId}::bigint, ${text}, ${id}::bigint)`;
+		await sql`insert into posts (id, user_id, text, conversation_id) values (${sql.cast(id, "bigint")}, ${sql.cast(userId, "bigint")}, ${text}, ${sql.cast(id, "bigint")})`;
 	}
 };
 const trends = async (tag: string) => (await trendingHashtags(1, 500)).some((t) => t.tag === `#${tag}`);
@@ -44,14 +44,14 @@ try {
 	const people = [await person("198.51.100.5"), await person("198.51.100.6"), await person("198.51.100.7")];
 	for (const p of people) await post(p, `talking about #${real}`);
 	check(await trends(real), "three separate people make a tag trend");
-	await sql`update users set status = 'suspended' where id = ${people[0]}::bigint`;
+	await sql`update users set status = 'suspended' where id = ${sql.cast(people[0], "bigint")}`;
 	check(!(await trends(real)), "a suspended account stops counting");
 	console.log(`all passed (${checks})`);
 } finally {
 	for (const id of created) {
-		await sql`delete from login_events where user_id = ${id}::bigint`;
-		await sql`delete from posts where user_id = ${id}::bigint`;
-		await sql`delete from users where id = ${id}::bigint`;
+		await sql`delete from login_events where user_id = ${sql.cast(id, "bigint")}`;
+		await sql`delete from posts where user_id = ${sql.cast(id, "bigint")}`;
+		await sql`delete from users where id = ${sql.cast(id, "bigint")}`;
 	}
 	await sql.end();
 }

@@ -18,7 +18,7 @@ async function session(username:string){
 		post:async(path:string,f:Record<string,string>)=>{const r=await fetch(origin+'/i/api'+path,{method:'POST',headers,body:new URLSearchParams(f)});return {status:r.status,text:await r.text()};},
 	};
 }
-const status=async(id:string)=>(await sql`select status from users where id=${id}::bigint`)[0].status;
+const status=async(id:string)=>(await sql`select status from users where id=${sql.cast(id, "bigint")}`)[0].status;
 const created:string[]=[];
 const admin=await session('pozo');
 const {operations}=(await admin.admin('operations')).data;
@@ -59,7 +59,7 @@ try{
 	check(!(await signup('cleanhandle','fine')).includes("isn't allowed"),'clean sign-up not refused for the name');
 	const names:string[]=[];
 	for(let i=0;i<3;i++){const n='nm'+Date.now().toString().slice(-9)+i;names.push(n);created.push(await createUser(n,n,password));}
-	await sql`update users set role='moderator' where id=${created[2]}::bigint`;
+	await sql`update users set role='moderator' where id=${sql.cast(created[2], "bigint")}`;
 	const a=await session(names[0]),b=await session(names[1]),staff=await session(names[2]);
 	const r1=await a.post('/1.1/account/update_profile.json',{name:'The Zorbleflax'});
 	check(r1.status>=400&&await status(created[0])==='suspended','display-name change suspends');
@@ -69,10 +69,10 @@ try{
 	check((await sql`select 1 from audit_log where action='auto_suspend_name' and target=${created[1]}`).length===1,'audit line written');
 	// reserved handles are refused at rename too, not only at sign-up
 	const reserved=await staff.post('/1.1/account/settings.json',{screen_name:'Admin'});
-	check(reserved.status===400&&reserved.text.includes('reserved')&&(await sql`select screen_name from users where id=${created[2]}::bigint`)[0].screen_name===names[2],'reserved handle refused at rename');
+	check(reserved.status===400&&reserved.text.includes('reserved')&&(await sql`select screen_name from users where id=${sql.cast(created[2], "bigint")}`)[0].screen_name===names[2],'reserved handle refused at rename');
 	const r3=await staff.post('/1.1/account/update_profile.json',{name:'Zorbleflax staff'});
 	check(r3.status>=400&&await status(created[2])!=='suspended','staff only refused');
-	await sql`update users set status='active', name='Zorbleflax old' where id=${created[0]}::bigint or id=${created[2]}::bigint`;
+	await sql`update users set status='active', name='Zorbleflax old' where id=${sql.cast(created[0], "bigint")} or id=${sql.cast(created[2], "bigint")}`;
 	const hits=(await admin.admin('blockedNameAccounts',{})).data.accounts;
 	check(hits.some((u:any)=>u.id===created[0])&&hits.some((u:any)=>u.id===created[2]&&u.staff),'check lists existing matches, staff marked');
 	check(await status(created[0])!=='suspended','listing alone suspends nobody');
@@ -91,7 +91,7 @@ try{
 	const bio=await session(more[0]),site=await session(more[1]),phrase=await session(more[2]);
 	const r4=await bio.post('/1.1/account/update_profile.json',{name:'Fresh name',description:'I am a big Zоrblеflax fan'});
 	check(r4.status>=400&&await status(bioId)==='suspended','a blocked word in the bio suspends');
-	check((await sql`select name from users where id=${bioId}::bigint`)[0].name!=='Fresh name','and nothing of that request was saved');
+	check((await sql`select name from users where id=${sql.cast(bioId, "bigint")}`)[0].name!=='Fresh name','and nothing of that request was saved');
 	await site.post('/1.1/account/update_profile.json',{url:'https://zorbleflax.example'});
 	check(await status(siteId)==='suspended','a blocked word in the website suspends');
 	await admin.admin('saveOperations',{...operations,blocked_names:[...(operations.blocked_names??[]),WORD],blocked_phrases:[...operations.blocked_phrases,'zorble flax']});
@@ -106,9 +106,9 @@ try{
 	check(poll.status>=400||JSON.parse(poll.text).errors,'a poll choice with a blocked word is refused');
 	const alt=await fetch(origin+'/i/api/1.1/media/metadata/create.json',{method:'POST',headers:{...phrase.headers,'content-type':'application/json'},body:JSON.stringify({media_id:'1',alt_text:{text:'a zorble flax picture'}})});
 	check(alt.status===400,'an image description with a blocked phrase is refused');
-	await sql`update users set status='active', bio='zorbleflax forever' where id=${created[0]}::bigint`;
+	await sql`update users set status='active', bio='zorbleflax forever' where id=${sql.cast(created[0], "bigint")}`;
 	check((await admin.admin('blockedNameAccounts',{})).data.accounts.some((u:any)=>u.id===created[0]),'the admin check finds a blocked word in a bio');
-	await sql`update users set status='suspended' where id=${created[0]}::bigint`;
+	await sql`update users set status='suspended' where id=${sql.cast(created[0], "bigint")}`;
 	// blocked phrases in posts go through the same look-alike folding
 	await admin.admin('saveOperations',{...operations,blocked_names:[...(operations.blocked_names??[]),WORD],blocked_phrases:[...operations.blocked_phrases,'zorble flax']});
 	const tweet=async(text:string)=>(await(await fetch(origin+'/i/api/graphql/q/CreateTweet',{method:'POST',headers:{...admin.headers,'content-type':'application/json'},body:JSON.stringify({variables:{tweet_text:text}})})).json()) as any;
@@ -121,6 +121,6 @@ try{
 	console.log(`all passed (${checks})`);
 }finally{
 	await admin.admin('saveOperations',operations);
-	for(const id of created){await sql`delete from audit_log where target=${id}`;await sql`delete from users where id=${id}::bigint`;}
+	for(const id of created){await sql`delete from audit_log where target=${id}`;await sql`delete from users where id=${sql.cast(id, "bigint")}`;}
 	await sql.end();
 }

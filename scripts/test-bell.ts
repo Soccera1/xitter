@@ -31,10 +31,10 @@ function check(label: string, ok: boolean, detail: unknown = "") {
 
 const viewer = await session(viewerName);
 const target = await session(targetName);
-const [{ id: viewerId }] = await sql`select id::text from users where screen_name = ${viewerName}`;
-const [{ id: targetId }] = await sql`select id::text from users where screen_name = ${targetName}`;
-const hadFollow = (await sql`select 1 from follows where follower_id = ${viewerId}::bigint and followee_id = ${targetId}::bigint`).length > 0;
-if (!hadFollow) await sql`insert into follows (follower_id, followee_id) values (${viewerId}::bigint, ${targetId}::bigint)`;
+const [{ id: viewerId }] = await sql`select ${sql.cast(sql`id`, "text")} as id from users where screen_name = ${viewerName}`;
+const [{ id: targetId }] = await sql`select ${sql.cast(sql`id`, "text")} as id from users where screen_name = ${targetName}`;
+const hadFollow = (await sql`select 1 from follows where follower_id = ${sql.cast(viewerId, "bigint")} and followee_id = ${sql.cast(targetId, "bigint")}`).length > 0;
+if (!hadFollow) await sql`insert into follows (follower_id, followee_id) values (${sql.cast(viewerId, "bigint")}, ${sql.cast(targetId, "bigint")})`;
 const made: string[] = [];
 const post = async (text: string, replyTo?: string) => {
 	const r = await target.gql("CreateTweet", { tweet_text: `${text} ${Date.now()}`, ...(replyTo ? { reply: { in_reply_to_tweet_id: replyTo } } : {}) });
@@ -92,9 +92,9 @@ try {
 	await viewer.gql("DeleteTweet", { tweet_id: other });
 } finally {
 	for (const id of made.reverse()) await target.gql("DeleteTweet", { tweet_id: id });
-	await sql`delete from post_notifications where user_id = ${viewerId}::bigint and target_id = ${targetId}::bigint`;
-	await sql`delete from repost_mutes where user_id = ${viewerId}::bigint and target_id = ${targetId}::bigint`;
-	if (!hadFollow) await sql`delete from follows where follower_id = ${viewerId}::bigint and followee_id = ${targetId}::bigint`;
+	await sql`delete from post_notifications where user_id = ${sql.cast(viewerId, "bigint")} and target_id = ${sql.cast(targetId, "bigint")}`;
+	await sql`delete from repost_mutes where user_id = ${sql.cast(viewerId, "bigint")} and target_id = ${sql.cast(targetId, "bigint")}`;
+	if (!hadFollow) await sql`delete from follows where follower_id = ${sql.cast(viewerId, "bigint")} and followee_id = ${sql.cast(targetId, "bigint")}`;
 }
 
 console.log(failures ? `${failures} failed` : "all checks passed");

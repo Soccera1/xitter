@@ -13,13 +13,13 @@ const hash = (token: string) => createHash("sha256").update(token).digest("hex")
 export async function requestReset(usernameOrEmail: string): Promise<void> {
 	const who = usernameOrEmail.trim().replace(/^@/, "");
 	if (!who || !mailEnabled()) return;
-	const [u] = await sql`select id::text, screen_name, email from users
+	const [u] = await sql`select ${sql.cast(sql`id`, "text")} as id, screen_name, email from users
 		where (lower(screen_name) = lower(${who}) or lower(email) = lower(${who})) and email is not null and status <> 'suspended'`;
 	if (!u) return;
-	const [recent] = await sql`select 1 from password_resets where user_id = ${u.id}::bigint and created_at > now() - interval '2 minutes'`;
+	const [recent] = await sql`select 1 from password_resets where user_id = ${sql.cast(u.id, "bigint")} and created_at > now() - ${sql.duration(2, "minute")}`;
 	if (recent) return;
 	const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
-	await sql`insert into password_resets (token_hash, user_id) values (${hash(token)}, ${u.id}::bigint)`;
+	await sql`insert into password_resets (token_hash, user_id) values (${hash(token)}, ${sql.cast(u.id, "bigint")})`;
 	const name = settings().instance_name;
 	await sendMail(
 		u.email,
@@ -31,8 +31,8 @@ export async function requestReset(usernameOrEmail: string): Promise<void> {
 
 async function valid(token: string): Promise<{ user_id: string } | undefined> {
 	if (!/^[0-9a-f]{64}$/.test(token)) return undefined;
-	const [row] = await sql`select user_id::text from password_resets
-		where token_hash = ${hash(token)} and not used and created_at > now() - interval '1 hour'`;
+	const [row] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id from password_resets
+		where token_hash = ${hash(token)} and not used and created_at > now() - ${sql.duration(1, "hour")}`;
 	return row;
 }
 
@@ -61,9 +61,9 @@ export async function resetRoute(req: Request, url: URL): Promise<Response> {
 	if (password.length < 8) return form(req, token, "Your password needs to be at least 8 characters.");
 	if (password.length > 256) return form(req, token, "Passwords are at most 256 characters.");
 	if (password !== String(f?.get("confirm") ?? "")) return form(req, token, "The two passwords don't match.");
-	await sql`update users set password_hash = ${await Bun.password.hash(password)} where id = ${row.user_id}::bigint`;
+	await sql`update users set password_hash = ${await Bun.password.hash(password)} where id = ${sql.cast(row.user_id, "bigint")}`;
 	await sql`update password_resets set used = true where token_hash = ${hash(token)}`;
-	await sql`delete from sessions where user_id = ${row.user_id}::bigint`;
+	await sql`delete from sessions where user_id = ${sql.cast(row.user_id, "bigint")}`;
 	return page(req, `<h1>Password changed</h1><p>You can now <a href="/">sign in</a> with it. Every device was signed out.</p>`);
 }
 

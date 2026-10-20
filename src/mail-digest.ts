@@ -22,10 +22,10 @@ const people = (names: string[]) => (names.length <= 2 ? names.join(" and ") : `
 // accounts due a digest of `setting`, by `column` (when it last went out) and
 // `checked` (when it was last found to have nothing new)
 const due = (setting: string, column: "activity_mailed_at" | "messages_mailed_at", checked: "activity_checked_at" | "messages_checked_at") =>
-	sql`select u.id::text, u.screen_name, u.email, u.notifications_seen_at, u.${sql(column)} as mailed_at, u.${sql(checked)} as checked_at from users u
-		where u.email is not null and u.status = 'active' and (u.email_settings->>${setting})::boolean is true
-			and (u.last_seen_at is null or u.last_seen_at < now() - make_interval(mins => ${AWAY_MINUTES}))
-			and (u.${sql(column)} is null or u.${sql(column)} < now() - make_interval(hours => ${EVERY_HOURS}))`;
+	sql`select ${sql.cast(sql`u.id`, "text")} as id, u.screen_name, u.email, u.notifications_seen_at, u.${sql(column)} as mailed_at, u.${sql(checked)} as checked_at from users u
+		where u.email is not null and u.status = 'active' and ${sql.cast(sql` (${sql.jsonGet(sql`u.email_settings`, setting, true)})`, "boolean")} is true
+			and (u.last_seen_at is null or u.last_seen_at < now() - ${sql.duration(AWAY_MINUTES, "minute")})
+			and (u.${sql(column)} is null or u.${sql(column)} < now() - ${sql.duration(EVERY_HOURS, "hour")})`;
 
 // An account with nothing to mail stays due, and each pass asked again about
 // everything since its last mail. A look that finds nothing is noted, and the
@@ -33,16 +33,16 @@ const due = (setting: string, column: "activity_mailed_at" | "messages_mailed_at
 async function nothingNew(id: string, column: "activity_checked_at" | "messages_checked_at", checkedAt: Date | null, since: number, any: (after: number) => Promise<boolean>) {
 	const at = new Date();
 	if (await any(checkedAt && checkedAt.getTime() > since ? checkedAt.getTime() : since)) return false;
-	await sql`update users set ${sql(column)} = ${at} where id = ${id}::bigint`;
+	await sql`update users set ${sql(column)} = ${at} where id = ${sql.cast(id, "bigint")}`;
 	return true;
 }
 
 async function senders(userId: string, after: Date) {
 	return sql`select distinct s.screen_name from chat_events e
-		join chat_members m on m.conversation_id = e.conversation_id and m.user_id = ${userId}::bigint and m.accepted and not m.muted
+		join chat_members m on m.conversation_id = e.conversation_id and m.user_id = ${sql.cast(userId, "bigint")} and m.accepted and not m.muted
 		join users s on s.id = e.sender_id
-		where e.kind = 1 and e.sender_id <> ${userId}::bigint and e.created_at > ${after}
-			and not exists (select 1 from blocks b where b.blocker_id = ${userId}::bigint and b.blocked_id = e.sender_id)`;
+		where e.kind = 1 and e.sender_id <> ${sql.cast(userId, "bigint")} and e.created_at > ${after}
+			and not exists (select 1 from blocks b where b.blocker_id = ${sql.cast(userId, "bigint")} and b.blocked_id = e.sender_id)`;
 }
 
 // a pass that outlasts the interval would otherwise start again on top of itself
@@ -69,7 +69,7 @@ async function digests(): Promise<number> {
 		if (await nothingNew(u.id, "activity_checked_at", u.checked_at, since, async (after) => (await unreadCount(u.id, after)) > 0)) continue;
 		const n = await unreadCount(u.id, since);
 		if (!n) continue;
-		await sql`update users set activity_mailed_at = now() where id = ${u.id}::bigint`;
+		await sql`update users set activity_mailed_at = now() where id = ${sql.cast(u.id, "bigint")}`;
 		await sendMail(
 			u.email,
 			`You have ${n} new notification${n === 1 ? "" : "s"} on ${name}`,
@@ -83,7 +83,7 @@ async function digests(): Promise<number> {
 		if (await nothingNew(u.id, "messages_checked_at", u.checked_at, since.getTime(), async (after) => (await senders(u.id, new Date(after))).length > 0)) continue;
 		const wrote = await senders(u.id, since);
 		if (!wrote.length) continue;
-		await sql`update users set messages_mailed_at = now() where id = ${u.id}::bigint`;
+		await sql`update users set messages_mailed_at = now() where id = ${sql.cast(u.id, "bigint")}`;
 		const from = people(wrote.map((s: any) => `@${s.screen_name}`));
 		await sendMail(
 			u.email,

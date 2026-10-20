@@ -32,12 +32,12 @@ function check(label: string, ok: boolean, detail: unknown = "") {
 
 const a = await session(nameA);
 const b = await session(nameB);
-const [{ id: aId }] = await sql`select id::text from users where screen_name = ${nameA}`;
-const [{ id: bId }] = await sql`select id::text from users where screen_name = ${nameB}`;
+const [{ id: aId }] = await sql`select ${sql.cast(sql`id`, "text")} as id from users where screen_name = ${nameA}`;
+const [{ id: bId }] = await sql`select ${sql.cast(sql`id`, "text")} as id from users where screen_name = ${nameB}`;
 const stamp = Date.now().toString(36);
 const mediaA = newId();
 const mediaB = newId();
-await sql`insert into media (id, user_id, kind, mime, size, width, height) values (${mediaA}::bigint, ${aId}::bigint, 'photo', 'image/png', 1, 1500, 500), (${mediaB}::bigint, ${bId}::bigint, 'photo', 'image/png', 1, 10, 10)`;
+await sql`insert into media (id, user_id, kind, mime, size, width, height) values (${sql.cast(mediaA, "bigint")}, ${sql.cast(aId, "bigint")}, 'photo', 'image/png', 1, 1500, 500), (${sql.cast(mediaB, "bigint")}, ${sql.cast(bId, "bigint")}, 'photo', 'image/png', 1, 10, 10)`;
 const topic = (await a.admin("saveTopic", { name: `Board games ${stamp}`, keywords: `boardgames${stamp}` })).id as string;
 let id = "";
 
@@ -74,7 +74,7 @@ try {
 } finally {
 	if (id) await a.gql("DeleteCommunityMutation", { id, name: "x" });
 	await a.admin("deleteTopic", { id: topic });
-	await sql`delete from media where id in (${mediaA}::bigint, ${mediaB}::bigint)`;
+	await sql`delete from media where id in (${sql.cast(mediaA, "bigint")}, ${sql.cast(mediaB, "bigint")})`;
 }
 
 console.log(failures ? `${failures} failed` : "all checks passed");

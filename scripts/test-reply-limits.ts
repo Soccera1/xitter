@@ -31,11 +31,11 @@ const author = await session(authorName);
 const followed = await session(followedName);
 const plain = await session(plainName);
 const verified = await session(verifiedName);
-const ids = (await sql`select id::text, screen_name from users where screen_name in (${authorName}, ${followedName})`) as any[];
+const ids = (await sql`select ${sql.cast(sql`id`, "text")} as id, screen_name from users where screen_name in (${authorName}, ${followedName})`) as any[];
 const authorId = ids.find((r) => r.screen_name === authorName).id;
 const followedId = ids.find((r) => r.screen_name === followedName).id;
-const hadFollow = (await sql`select 1 from follows where follower_id = ${authorId}::bigint and followee_id = ${followedId}::bigint`).length > 0;
-if (!hadFollow) await sql`insert into follows (follower_id, followee_id) values (${authorId}::bigint, ${followedId}::bigint)`;
+const hadFollow = (await sql`select 1 from follows where follower_id = ${sql.cast(authorId, "bigint")} and followee_id = ${sql.cast(followedId, "bigint")}`).length > 0;
+if (!hadFollow) await sql`insert into follows (follower_id, followee_id) values (${sql.cast(authorId, "bigint")}, ${sql.cast(followedId, "bigint")})`;
 
 const made: string[] = [];
 const post = async (text: string, mode?: string) => {
@@ -80,8 +80,8 @@ try {
 	check("a nested reply is held to the same policy", nested.ok && !(await reply(plain, community, "nope")).ok);
 } finally {
 	for (const id of made.reverse()) await author.gql("DeleteTweet", { tweet_id: id }).catch(() => {});
-	await sql`delete from posts where id = any(${sql.array(made, "INT8")})`;
-	if (!hadFollow) await sql`delete from follows where follower_id = ${authorId}::bigint and followee_id = ${followedId}::bigint`;
+	await sql`delete from posts where ${sql.contains(sql.array(made, "INT8"), sql`id`)}`;
+	if (!hadFollow) await sql`delete from follows where follower_id = ${sql.cast(authorId, "bigint")} and followee_id = ${sql.cast(followedId, "bigint")}`;
 }
 console.log(failures ? `${failures} FAILED` : "all passed");
 process.exit(failures ? 1 : 0);

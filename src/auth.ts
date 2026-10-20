@@ -82,7 +82,7 @@ export async function createUser(screenName: string, name: string, password: str
 	if (password.length < 8) throw new Error("password: at least 8 characters");
 	const id = newId();
 	const hash = await Bun.password.hash(password);
-	await sql`insert into users (id, screen_name, name, password_hash) values (${id}::bigint, ${screenName}, ${name}, ${hash})`;
+	await sql`insert into users (id, screen_name, name, password_hash) values (${sql.cast(id, "bigint")}, ${screenName}, ${name}, ${hash})`;
 	return id;
 }
 
@@ -91,19 +91,19 @@ export async function login(screenName: string, password: string): Promise<{ tok
 	await expireSanctions();
 	// accounts with a second factor sign in through the dialog's code step (startSession)
 	const [u] = await sql`select id, password_hash, deactivated_at from users where lower(screen_name) = lower(${screenName}) and not totp_enabled
-		and (status <> 'suspended' or deactivated_at > now() - interval '30 days')`;
+		and (status <> 'suspended' or deactivated_at > now() - ${sql.duration(30, "day")})`;
 	// verify against a dummy hash when the user is unknown so timing does not reveal it
 	const ok = await Bun.password.verify(password, u?.password_hash ?? DUMMY_HASH).catch(() => false);
 	if (!u || !ok) return undefined;
 	// signing in within 30 days of deactivating brings the account back
 	if (u.deactivated_at) {
-		const back = await sql`update users set status = 'active', deactivated_at = null where id = ${u.id}::bigint and deactivated_at > now() - interval '30 days' returning id`;
+		const back = await sql`update users set status = 'active', deactivated_at = null where id = ${sql.cast(u.id, "bigint")} and deactivated_at > now() - ${sql.duration(30, "day")} returning id`;
 		if (!back.length) return undefined;
-	} else if ((await sql`select status from users where id = ${u.id}::bigint`)[0]?.status === "suspended") return undefined;
+	} else if ((await sql`select status from users where id = ${sql.cast(u.id, "bigint")}`)[0]?.status === "suspended") return undefined;
 	const token = randomHex(20);
 	const csrf = randomHex(32);
-	await sql`insert into sessions (token, user_id, csrf) values (${token}, ${u.id}::bigint, ${csrf})`;
-	await sql`update users set last_seen_at = now() where id = ${u.id}::bigint`;
+	await sql`insert into sessions (token, user_id, csrf) values (${token}, ${sql.cast(u.id, "bigint")}, ${csrf})`;
+	await sql`update users set last_seen_at = now() where id = ${sql.cast(u.id, "bigint")}`;
 	return { token, csrf, userId: u.id };
 }
 
@@ -111,9 +111,9 @@ export async function login(screenName: string, password: string): Promise<{ tok
 export async function startSession(userId: string): Promise<{ token: string; csrf: string; userId: string }> {
 	const token = randomHex(20);
 	const csrf = randomHex(32);
-	const made = await sql`insert into sessions (token, user_id, csrf) select ${token}, id, ${csrf} from users where id = ${userId}::bigint and status <> 'suspended' returning token`;
+	const made = await sql`insert into sessions (token, user_id, csrf) select ${token}, id, ${csrf} from users where id = ${sql.cast(userId, "bigint")} and status <> 'suspended' returning token`;
 	if (!made.length) throw new Error("account suspended");
-	await sql`update users set last_seen_at = now() where id = ${userId}::bigint`;
+	await sql`update users set last_seen_at = now() where id = ${sql.cast(userId, "bigint")}`;
 	return { token, csrf, userId };
 }
 
@@ -135,13 +135,14 @@ export function parseCookies(req: Request): Record<string, string> {
 import { requestCountry } from "./login-history";
 
 const viewerCols = () => sql`u.id, u.screen_name, u.name, u.bio, u.location, u.website, u.avatar_url, u.banner_url, u.verified_type, u.flag, u.status, u.role, u.protected, u.language, u.created_at,
-	u.preferences->>'discoverable_by_email' = 'true' as discoverable_by_email,
-	(select coalesce(json_agg(json_build_object('id', b.id::text, 'name', b.name) order by ub.position, b.name), '[]')
+	${sql.jsonGet(sql`
+	u.preferences`, sql`'discoverable_by_email'`, true)} = 'true' as discoverable_by_email,
+	(select coalesce(${sql.jsonAgg(sql.jsonObject(sql`'id'`, sql.cast(sql`b.id`, "text"), sql`'name'`, sql`b.name`), sql`ub.position, b.name`)}, '[]')
 		from user_badges ub join custom_badges b on b.id = ub.badge_id where ub.user_id = u.id) as badges`;
 
 // an account as a viewer without a session of its own (a delegate acting as it)
 export async function viewerById(id: string): Promise<Omit<Viewer, "csrf" | "token"> | undefined> {
-	const [row] = await sql`select ${viewerCols()} from users u where u.id = ${id}::bigint and u.status <> 'suspended'`;
+	const [row] = await sql`select ${viewerCols()} from users u where u.id = ${sql.cast(id, "bigint")} and u.status <> 'suspended'`;
 	return row as Viewer | undefined;
 }
 
@@ -154,10 +155,10 @@ async function loadViewer(req: Request): Promise<Viewer | undefined> {
 	// for the admin panel's session list; written at most once a minute
 	if (row)
 		await sql`update sessions set last_seen_at = now(), user_agent = ${(req.headers.get("user-agent") ?? "").slice(0, 500)}
-			where token = ${token} and (last_seen_at < now() - interval '1 minute' or user_agent is null)`;
+			where token = ${token} and (last_seen_at < now() - ${sql.duration(1, "minute")} or user_agent is null)`;
 	// where the account is based, from the edge's country header; kept from the first request that has one
 	const country = row ? requestCountry(req) : undefined;
-	if (country) await sql`update users set country = ${country} where id = ${row.id}::bigint and country is null`;
+	if (country) await sql`update users set country = ${country} where id = ${sql.cast(row.id, "bigint")} and country is null`;
 	return row as Viewer | undefined;
 }
 

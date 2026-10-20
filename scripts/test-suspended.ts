@@ -38,7 +38,7 @@ try {
 	await b.gql("FavoriteTweet", { tweet_id: root });
 	await b.gql("CreateRetweet", { tweet_id: root });
 	await fetch(origin + "/i/api/1.1/friendships/create.json", { method: "POST", headers: { ...(await (async () => { const r = await fetch(origin + "/login", { method: "POST", body: new URLSearchParams({ username: badName, password }), redirect: "manual" }); const c = r.headers.getSetCookie().map((x) => x.split(";")[0]); return { cookie: c.join("; "), "x-csrf-token": c.find((x) => x.startsWith("ct0="))!.slice(4) }; })()) }, body: new URLSearchParams({ user_id: seer }) });
-	await sql`update users set status = 'suspended', status_until = null where id = ${bad}::bigint`;
+	await sql`update users set status = 'suspended', status_until = null where id = ${sql.cast(bad, "bigint")}`;
 
 	const leaks = (r: unknown, ...needles: string[]) => needles.some((n) => JSON.stringify(r).includes(n));
 	for (const [who, s, staff] of [["viewer", v, false], ["staff", admin, true]] as const) {
@@ -74,7 +74,7 @@ try {
 		check(`${who}: like and repost counts don't count it`, legacy?.favorite_count === 0 && legacy?.retweet_count === 0, legacy && { likes: legacy.favorite_count, reposts: legacy.retweet_count });
 	}
 } finally {
-	for (const id of made) await sql`delete from users where id = ${id}::bigint`;
+	for (const id of made) await sql`delete from users where id = ${sql.cast(id, "bigint")}`;
 	await sql.end();
 }
 console.log(failures ? `${failures} FAILED` : "all passed");

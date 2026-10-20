@@ -179,7 +179,7 @@ async function finalize(id: string, p: Pending): Promise<Response> {
 		}
 		if (p.video) {
 			await sql`insert into media (id, user_id, kind, mime, size, width, height, state)
-				values (${id}::bigint, ${p.userId}::bigint, 'video', 'video/mp4', ${p.total}, 0, 0, 'processing')`;
+				values (${sql.cast(id, "bigint")}, ${sql.cast(p.userId, "bigint")}, 'video', 'video/mp4', ${p.total}, 0, 0, 'processing')`;
 			queueVideo(MEDIA_DIR, id);
 			return Response.json({ ...idFields(id), size: p.total, expires_after_secs: 86400, processing_info: { state: "pending", check_after_secs: 1 } });
 		}
@@ -196,7 +196,7 @@ async function finalize(id: string, p: Pending): Promise<Response> {
 		if (image.mime === "image/gif") ({ data, image } = await croppedGif(id, data, image));
 		writeFileSync(fileOf(id), data);
 		await sql`insert into media (id, user_id, kind, mime, size, width, height)
-			values (${id}::bigint, ${p.userId}::bigint, 'photo', ${image.mime}, ${data.length}, ${image.width}, ${image.height})`;
+			values (${sql.cast(id, "bigint")}, ${sql.cast(p.userId, "bigint")}, 'photo', ${image.mime}, ${data.length}, ${image.width}, ${image.height})`;
 		return Response.json({
 			...idFields(id),
 			size: data.length,
@@ -321,7 +321,7 @@ export async function mediaUpload(req: Request, url: URL, viewer: Viewer): Promi
 		}
 		case "STATUS": {
 			if (!isId(id)) return uploadError("Unknown upload.", 404);
-			const [row] = await sql`select state from media where id = ${id}::bigint and user_id = ${viewer.id}::bigint`;
+			const [row] = await sql`select state from media where id = ${sql.cast(id, "bigint")} and user_id = ${sql.cast(viewer.id, "bigint")}`;
 			if (!row) return uploadError("Unknown upload.", 404);
 			if (row.state === "processing")
 				return Response.json({ ...idFields(id), processing_info: { state: "in_progress", check_after_secs: 1, progress_percent: progress.get(id!) ?? 0 } });
@@ -348,7 +348,7 @@ async function servedOf(id: string): Promise<Served | undefined> {
 		mimeCache.set(id, hit);
 		return hit;
 	}
-	const [row] = await sql`select mime, user_id::text as owner, post_id::text as post from media where id = ${id}::bigint`;
+	const [row] = await sql`select mime, ${sql.cast(sql`user_id`, "text")} as owner, ${sql.cast(sql`post_id`, "text")} as post from media where id = ${sql.cast(id, "bigint")}`;
 	if (!row) return undefined;
 	if (row.post) {
 		if (mimeCache.size >= MAX_MIME_CACHE) mimeCache.delete(mimeCache.keys().next().value!);
@@ -360,7 +360,7 @@ async function servedOf(id: string): Promise<Served | undefined> {
 async function ownerHidden(owner: string) {
 	const hit = ownerCache.get(owner);
 	if (hit && Date.now() - hit.at < 30_000) return hit.hidden;
-	const [row] = await sql`select protected or status = 'suspended' or deactivated_at is not null as hidden from users where id = ${owner}::bigint`;
+	const [row] = await sql`select protected or status = 'suspended' or deactivated_at is not null as hidden from users where id = ${sql.cast(owner, "bigint")}`;
 	if (ownerCache.size >= MAX_MIME_CACHE) ownerCache.delete(ownerCache.keys().next().value!);
 	ownerCache.set(owner, { hidden: !!row?.hidden, at: Date.now() });
 	return !!row?.hidden;
@@ -368,7 +368,7 @@ async function ownerHidden(owner: string) {
 
 async function cacheFor(viewer: Viewer, served: Served): Promise<string | undefined> {
 	if (!served.post || !(await ownerHidden(served.owner))) return IMMUTABLE;
-	const [unseen] = await sql`select 1 where ${served.owner}::bigint in ${protectedFor(viewer.id)} or ${served.owner}::bigint in ${suspendedFor(viewer.id)}`;
+	const [unseen] = await sql`select 1 where ${sql.cast(served.owner, "bigint")} in ${protectedFor(viewer.id)} or ${sql.cast(served.owner, "bigint")} in ${suspendedFor(viewer.id)}`;
 	return unseen ? undefined : PRIVATE;
 }
 
@@ -410,20 +410,20 @@ export async function serveMedia(req: Request, pathname: string, viewer: Viewer)
 export async function attachMedia(userId: string, postId: string, mediaIds: string[]) {
 	const ids = mediaIds.filter((id) => isId(id)).slice(0, 4);
 	if (!ids.length) return;
-	const rows = await sql`select id, kind from media where id = any(${sql.array(ids, "INT8")}) and user_id = ${userId}::bigint
+	const rows = await sql`select id, kind from media where ${sql.contains(sql.array(ids, "INT8"), sql`id`)} and user_id = ${sql.cast(userId, "bigint")}
 		and post_id is null and state = 'ready'`;
 	const kinds = new Map<string, string>(rows.map((r: any) => [String(r.id), r.kind]));
 	const usable = ids.filter((id) => kinds.has(id));
 	const video = usable.find((id) => kinds.get(id) === "video");
 	for (const [i, id] of (video ? [video] : usable).entries())
-		await sql`update media set post_id = ${postId}::bigint, position = ${i} where id = ${id}::bigint`;
+		await sql`update media set post_id = ${sql.cast(postId, "bigint")}, position = ${i} where id = ${sql.cast(id, "bigint")}`;
 }
 
 export async function mediaForPosts(postIds: string[]): Promise<Map<string, MediaRow[]>> {
 	const out = new Map<string, MediaRow[]>();
 	if (!postIds.length) return out;
 	const rows = await sql`select id, post_id, kind, mime, size, width, height, position, duration_ms, alt_text, sensitive_warning from media
-		where post_id = any(${sql.array(postIds, "INT8")}) and state = 'ready' order by post_id, position`;
+		where ${sql.contains(sql.array(postIds, "INT8"), sql`post_id`)} and state = 'ready' order by post_id, position`;
 	for (const r of rows) {
 		const list = out.get(r.post_id) ?? [];
 		list.push(r as MediaRow);

@@ -20,7 +20,7 @@ const hash = (token: string) => createHash("sha256").update(token).digest("hex")
 export async function createPlatform(label: string, actorId: string) {
 	const token = `xitter_${randomBytes(32).toString("hex")}`;
 	const id = newId();
-	await sql`insert into client_platforms (id, label, token_hash, creator_id) values (${id}::bigint, ${label}, ${hash(token)}, ${actorId}::bigint)`;
+	await sql`insert into client_platforms (id, label, token_hash, creator_id) values (${sql.cast(id, "bigint")}, ${label}, ${hash(token)}, ${sql.cast(actorId, "bigint")})`;
 	return { id, label, token };
 }
 

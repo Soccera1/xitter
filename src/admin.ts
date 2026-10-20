@@ -7,7 +7,7 @@
 // instance settings). Every change is written to the audit log.
 
 import type { Viewer } from "./auth";
-import { sql, databaseBackend } from "./db";
+import { sql } from "./db";
 import { isFlag } from "./flags";
 import { isId, newId } from "./ids";
 import { createInvite, staffHandleProblem } from "./invites";
@@ -44,7 +44,7 @@ export type Action = { role: Role; run: (actor: Viewer, b: Body, req?: Request) 
 
 export async function audit(actor: Viewer, action: string, target: string | null, detail: unknown = null) {
 	await sql`insert into audit_log (id, actor_id, action, target, detail)
-		values (${newId()}::bigint, ${actor.id}::bigint, ${action}, ${target}, ${detail === null ? null : JSON.stringify(detail)}::text::jsonb)`;
+		values (${sql.cast(newId(), "bigint")}, ${sql.cast(actor.id, "bigint")}, ${action}, ${target}, ${sql.cast(detail === null ? null : JSON.stringify(detail), "jsonb")})`;
 }
 
 export const idOf = (v: unknown, what = "id") => {
@@ -54,7 +54,7 @@ export const idOf = (v: unknown, what = "id") => {
 };
 
 async function userRow(id: string) {
-	const [u] = await sql`select id, screen_name, role, status, role_granted_by::text from users where id = ${id}::bigint`;
+	const [u] = await sql`select id, screen_name, role, status, ${sql.cast(sql`role_granted_by`, "text")} as role_granted_by from users where id = ${sql.cast(id, "bigint")}`;
 	if (!u) throw new AdminError("No such account.", 404);
 	return u;
 }
@@ -64,7 +64,7 @@ async function userRow(id: string) {
 // change the owner's account, the owner can change theirs. Admins otherwise
 // can't touch each other, except that whoever gave an account its staff role
 // can still act on it.
-const ownerId = async () => (await sql`select id::text from users where role = 'admin' order by created_at, id limit 1`)[0]?.id as string | undefined;
+const ownerId = async () => (await sql`select ${sql.cast(sql`id`, "text")} as id from users where role = 'admin' order by created_at, id limit 1`)[0]?.id as string | undefined;
 const rankOf = (role: string | null, isOwner: boolean) => (isOwner ? 4 : role ? RANK[role as Role] : 0);
 
 export async function guard(actor: Viewer, targetId: string) {
@@ -83,23 +83,23 @@ const randomPassword = () => {
 
 const like = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
-const userListCols = sql`u.id::text as id, u.screen_name, u.name, u.avatar_url, u.verified_type, u.translator, u.flag, u.status, u.role,
+const userListCols = sql`${sql.cast(sql`u.id`, "text")} as id, u.screen_name, u.name, u.avatar_url, u.verified_type, u.translator, u.flag, u.status, u.role,
 	u.created_at, u.last_seen_at, u.invite_code,
-	(select count(*)::int from posts p where p.user_id = u.id) as posts,
-	(select count(*)::int from follows f where f.followee_id = u.id) as followers,
+	(select ${sql.cast(sql`count(*)`, "int")} from posts p where p.user_id = u.id) as posts,
+	(select ${sql.cast(sql`count(*)`, "int")} from follows f where f.followee_id = u.id) as followers,
 	(select o.screen_name from affiliations af join users o on o.id = af.org_id where af.user_id = u.id) as org,
-	(select count(*)::int from affiliations af where af.org_id = u.id) as affiliates`;
+	(select ${sql.cast(sql`count(*)`, "int")} from affiliations af where af.org_id = u.id) as affiliates`;
 
 const ACTIONS: Record<string, Action> = {
 	setNotesAccess: { role: "admin", run: async (a, b) => {
 		const id = idOf(b.id);
 		await guard(a, id);
 		if (typeof b.enabled !== "boolean") throw new AdminError("Provide a boolean access setting.");
-		await sql`update users set notes_writer = ${b.enabled} where id = ${id}::bigint`;
+		await sql`update users set notes_writer = ${b.enabled} where id = ${sql.cast(id, "bigint")}`;
 		await audit(a, "set_notes_access", id, { enabled: b.enabled });
 		return {};
 	} },
-	platforms: { role: "admin", run: async () => ({ platforms: await sql`select id::text, label, revoked, created_at from client_platforms order by id desc` }) },
+	platforms: { role: "admin", run: async () => ({ platforms: await sql`select ${sql.cast(sql`id`, "text")} as id, label, revoked, created_at from client_platforms order by id desc` }) },
 	createPlatform: { role: "admin", run: async (a, b) => {
 		const label = typeof b.label === "string" ? b.label.trim() : "";
 		if (!label || [...label].length > 80 || /[\x00-\x1f\x7f]/.test(label)) throw new AdminError("Enter a platform label of 1–80 characters.");
@@ -109,7 +109,7 @@ const ACTIONS: Record<string, Action> = {
 	} },
 	revokePlatform: { role: "admin", run: async (a, b) => {
 		const id = idOf(b.id);
-		const rows = await sql`update client_platforms set revoked = true where id = ${id}::bigint returning id`;
+		const rows = await sql`update client_platforms set revoked = true where id = ${sql.cast(id, "bigint")} returning id`;
 		if (!rows.length) throw new AdminError("No such platform.", 404);
 		await audit(a, "revoke_platform", id);
 		return {};
@@ -117,7 +117,7 @@ const ACTIONS: Record<string, Action> = {
 	mail: { role: "support", run: async () => ({
 		enabled: mailEnabled(),
 		from: mailFrom(),
-		log: await sql`select m.id::text, m.to_addr, m.kind, m.subject, m.status, m.error, m.created_at, u.screen_name
+		log: await sql`select ${sql.cast(sql`m.id`, "text")} as id, m.to_addr, m.kind, m.subject, m.status, m.error, m.created_at, u.screen_name
 			from mail_log m left join users u on u.id = m.user_id order by m.created_at desc limit 50`,
 	}) },
 	// what Resend says to a test mail answers whether the sending domain is verified
@@ -172,40 +172,40 @@ const ACTIONS: Record<string, Action> = {
 		role: "support",
 		run: async () => {
 			const [s] = await sql`select
-				(select count(*)::int from users) as users,
-				(select count(*)::int from users where status <> 'active') as sanctioned,
-				(select count(*)::int from users where last_seen_at > now() - interval '1 day') as active_day,
-				(select count(*)::int from users where last_seen_at > now() - interval '7 days') as active_week,
-				(select count(*)::int from users where last_seen_at > now() - interval '30 days') as active_month,
-				(select count(*)::int from follows) as follows,
-				(select count(*)::int from reposts) as reposts,
-				(select count(*)::int from bookmarks) as bookmarks,
-				(select count(*)::int from posts) as posts,
-				(select count(*)::int from posts where created_at > now() - interval '1 day') as posts_today,
-				(select count(*)::int from likes) as likes,
-				(select count(*)::int from media) as media,
-				(select coalesce(sum(size), 0)::bigint::text from media) as media_bytes,
-				(select count(*)::int from media where state = 'processing') as videos_processing,
-				(select count(*)::int from invites where not revoked and uses < max_uses and (expires_at is null or expires_at > now())) as open_invites,
-				(select count(*)::int from reports where status = 'open') as open_reports,
-				(select count(*)::int from error_log where not resolved) as open_errors`;
+				(select ${sql.cast(sql`count(*)`, "int")} from users) as users,
+				(select ${sql.cast(sql`count(*)`, "int")} from users where status <> 'active') as sanctioned,
+				(select ${sql.cast(sql`count(*)`, "int")} from users where last_seen_at > now() - ${sql.duration(1, "day")}) as active_day,
+				(select ${sql.cast(sql`count(*)`, "int")} from users where last_seen_at > now() - ${sql.duration(7, "day")}) as active_week,
+				(select ${sql.cast(sql`count(*)`, "int")} from users where last_seen_at > now() - ${sql.duration(30, "day")}) as active_month,
+				(select ${sql.cast(sql`count(*)`, "int")} from follows) as follows,
+				(select ${sql.cast(sql`count(*)`, "int")} from reposts) as reposts,
+				(select ${sql.cast(sql`count(*)`, "int")} from bookmarks) as bookmarks,
+				(select ${sql.cast(sql`count(*)`, "int")} from posts) as posts,
+				(select ${sql.cast(sql`count(*)`, "int")} from posts where created_at > now() - ${sql.duration(1, "day")}) as posts_today,
+				(select ${sql.cast(sql`count(*)`, "int")} from likes) as likes,
+				(select ${sql.cast(sql`count(*)`, "int")} from media) as media,
+				(select ${sql.cast(sql.cast(sql`coalesce(sum(size), 0)`, "bigint"), "text")} from media) as media_bytes,
+				(select ${sql.cast(sql`count(*)`, "int")} from media where state = 'processing') as videos_processing,
+				(select ${sql.cast(sql`count(*)`, "int")} from invites where not revoked and uses < max_uses and (expires_at is null or expires_at > now())) as open_invites,
+				(select ${sql.cast(sql`count(*)`, "int")} from reports where status = 'open') as open_reports,
+				(select ${sql.cast(sql`count(*)`, "int")} from error_log where not resolved) as open_errors`;
 			const days = await sql`select to_char(d, 'YYYY-MM-DD') as day,
-				(select count(*)::int from posts p where p.created_at >= d and p.created_at < d + interval '1 day') as posts,
-				(select count(*)::int from users u where u.created_at >= d and u.created_at < d + interval '1 day') as signups,
-				(select count(*)::int from likes l where l.created_at >= d and l.created_at < d + interval '1 day') as likes,
-				(select count(*)::int from follows f where f.created_at >= d and f.created_at < d + interval '1 day') as follows,
-				(select count(*)::int from reports r where r.created_at >= d and r.created_at < d + interval '1 day') as reports
-				from ${databaseBackend === "sqlite" ? sql`(with recursive days(d) as (select date_trunc('day', now()) - 13 * 86400000 union all select d + 86400000 from days where d < date_trunc('day', now())) select d from days) days` : sql`generate_series(date_trunc('day', now()) - interval '13 days', date_trunc('day', now()), interval '1 day') d`} order by d`;
+				(select ${sql.cast(sql`count(*)`, "int")} from posts p where p.created_at >= d and p.created_at < d + ${sql.duration(1, "day")}) as posts,
+				(select ${sql.cast(sql`count(*)`, "int")} from users u where u.created_at >= d and u.created_at < d + ${sql.duration(1, "day")}) as signups,
+				(select ${sql.cast(sql`count(*)`, "int")} from likes l where l.created_at >= d and l.created_at < d + ${sql.duration(1, "day")}) as likes,
+				(select ${sql.cast(sql`count(*)`, "int")} from follows f where f.created_at >= d and f.created_at < d + ${sql.duration(1, "day")}) as follows,
+				(select ${sql.cast(sql`count(*)`, "int")} from reports r where r.created_at >= d and r.created_at < d + ${sql.duration(1, "day")}) as reports
+				from ${sql.days(14)} days order by d`;
 			// this week's movers: new followers, liked posts
-			const risers = await sql`select u.id::text as id, u.screen_name, u.name, u.avatar_url, u.verified_type, count(*)::int as gained
-				from follows f join users u on u.id = f.followee_id where f.created_at > now() - interval '7 days'
+			const risers = await sql`select ${sql.cast(sql`u.id`, "text")} as id, u.screen_name, u.name, u.avatar_url, u.verified_type, ${sql.cast(sql`count(*)`, "int")} as gained
+				from follows f join users u on u.id = f.followee_id where f.created_at > now() - ${sql.duration(7, "day")}
 				group by u.id order by gained desc, u.id limit 5`;
-			const liked = await sql`select p.id::text as id, p.text, u.screen_name, count(*)::int as likes
+			const liked = await sql`select ${sql.cast(sql`p.id`, "text")} as id, p.text, u.screen_name, ${sql.cast(sql`count(*)`, "int")} as likes
 				from likes l join posts p on p.id = l.post_id join users u on u.id = p.user_id
-				where l.created_at > now() - interval '7 days' and not p.hidden
+				where l.created_at > now() - ${sql.duration(7, "day")} and not p.hidden
 				group by p.id, u.screen_name order by likes desc, p.id desc limit 5`;
-			const storage = await sql`select kind, count(*)::int as files, coalesce(sum(size), 0)::bigint::text as bytes from media group by kind order by kind`;
-			const sources = await sql`select coalesce(signup_source, 'unknown') as source, count(*)::int as users from users group by 1 order by users desc limit 8`;
+			const storage = await sql`select kind, ${sql.cast(sql`count(*)`, "int")} as files, ${sql.cast(sql.cast(sql`coalesce(sum(size), 0)`, "bigint"), "text")} as bytes from media group by kind order by kind`;
+			const sources = await sql`select coalesce(signup_source, 'unknown') as source, ${sql.cast(sql`count(*)`, "int")} as users from users group by 1 order by users desc limit 8`;
 			return { ...s, days, risers, liked, storage, sources };
 		},
 	},
@@ -216,12 +216,12 @@ const ACTIONS: Record<string, Action> = {
 			const q = String(b.q ?? "").trim().replace(/^@/, "");
 			const status = ["active", "restricted", "limited", "suspended"].includes(b.status) ? b.status : null;
 			const staff = !!b.staff;
-			const match = sql`(${q} = '' or u.screen_name ilike ${like(q)} or u.name ilike ${like(q)})
-					and (${status}::text is null or u.status = ${status})
+			const match = sql`(${q} = '' or ${sql.like(sql`u.screen_name`, like(q), true)} or ${sql.like(sql`u.name`, like(q), true)})
+					and (${sql.cast(status, "text")} is null or u.status = ${status})
 					and (not ${staff} or u.role is not null)`;
 			const rows = await sql`select ${userListCols} from users u where ${match}
 				order by u.created_at desc, u.id desc limit ${Math.min(Math.max(Number(b.limit) || 50, 1), 500)} offset ${Math.max(Number(b.offset) || 0, 0)}`;
-			const [{ total }] = await sql`select count(*)::int as total from users u where ${match}`;
+			const [{ total }] = await sql`select ${sql.cast(sql`count(*)`, "int")} as total from users u where ${match}`;
 			return { users: rows, total };
 		},
 	},
@@ -230,22 +230,22 @@ const ACTIONS: Record<string, Action> = {
 		role: "support",
 		run: async (_a, b) => {
 			const id = idOf(b.id);
-			const [u] = await sql`select ${userListCols}, u.bio, u.location, u.website, u.based_in_override, u.country, u.count_overrides, u.notes_writer, u.org_badge_id::text, u.status_until, u.parody_label, u.label_id::text,
-				(select coalesce(json_agg(ub.badge_id::text order by ub.position), '[]') from user_badges ub where ub.user_id = u.id) as badge_ids,
-				(select count(*)::int from sessions s where s.user_id = u.id) as sessions,
+			const [u] = await sql`select ${userListCols}, u.bio, u.location, u.website, u.based_in_override, u.country, u.count_overrides, u.notes_writer, ${sql.cast(sql`u.org_badge_id`, "text")} as org_badge_id, u.status_until, u.parody_label, ${sql.cast(sql`u.label_id`, "text")} as label_id,
+				(select coalesce(${sql.jsonAgg(sql.cast(sql`ub.badge_id`, "text"), sql`ub.position`, false)}, '[]') from user_badges ub where ub.user_id = u.id) as badge_ids,
+				(select ${sql.cast(sql`count(*)`, "int")} from sessions s where s.user_id = u.id) as sessions,
 				(select c.screen_name from invites i join users c on c.id = i.created_by where i.code = u.invite_code) as invited_by
-				from users u where u.id = ${id}::bigint`;
+				from users u where u.id = ${sql.cast(id, "bigint")}`;
 			if (!u) throw new AdminError("No such account.", 404);
-			const invited = await sql`select u.id::text as id, u.screen_name from users u join invites i on i.code = u.invite_code
-				where i.created_by = ${id}::bigint order by u.created_at`;
+			const invited = await sql`select ${sql.cast(sql`u.id`, "text")} as id, u.screen_name from users u join invites i on i.code = u.invite_code
+				where i.created_by = ${sql.cast(id, "bigint")} order by u.created_at`;
 			const log = await sql`select l.action, l.detail, l.created_at, a.screen_name as actor, l.actor_id is null as automatic from audit_log l
 				left join users a on a.id = l.actor_id where l.target = ${id} order by l.id desc limit 50`;
 			const strikes = await activeStrikes(id);
 			const ladder = settings().automod.ladder;
-			const alts = await sql`select distinct u.id::text as id, u.screen_name, u.status from login_events mine
-				join login_events other on other.ip = mine.ip and other.user_id <> mine.user_id and other.created_at > now() - interval '90 days'
+			const alts = await sql`select distinct ${sql.cast(sql`u.id`, "text")} as id, u.screen_name, u.status from login_events mine
+				join login_events other on other.ip = mine.ip and other.user_id <> mine.user_id and other.created_at > now() - ${sql.duration(90, "day")}
 				join users u on u.id = other.user_id
-				where mine.user_id = ${id}::bigint and mine.ip is not null and mine.created_at > now() - interval '90 days' limit 20`;
+				where mine.user_id = ${sql.cast(id, "bigint")} and mine.ip is not null and mine.created_at > now() - ${sql.duration(90, "day")} limit 20`;
 			return { user: u, invited, log, alts, strikes, next_step: ladder.length ? ladder[Math.min(strikes + 1, ladder.length) - 1] : 0 };
 		},
 	},
@@ -269,13 +269,13 @@ const ACTIONS: Record<string, Action> = {
 			}
 			if (!Object.keys(changes).length) return {};
 			if (changes.screen_name) {
-				const [taken] = await sql`select 1 from users where lower(screen_name) = lower(${changes.screen_name}) and id <> ${id}::bigint`;
+				const [taken] = await sql`select 1 from users where lower(screen_name) = lower(${changes.screen_name}) and id <> ${sql.cast(id, "bigint")}`;
 				if (taken) throw new AdminError("That handle is taken.");
 			}
-			const [old] = await sql`select screen_name from users where id = ${id}::bigint`;
-			await sql`update users set ${sql(changes)} where id = ${id}::bigint`;
+			const [old] = await sql`select screen_name from users where id = ${sql.cast(id, "bigint")}`;
+			await sql`update users set ${sql(changes)} where id = ${sql.cast(id, "bigint")}`;
 			if (changes.screen_name && changes.screen_name !== old.screen_name)
-				await sql`insert into username_changes (user_id, old_name, new_name) values (${id}::bigint, ${old.screen_name}, ${changes.screen_name})`;
+				await sql`insert into username_changes (user_id, old_name, new_name) values (${sql.cast(id, "bigint")}, ${old.screen_name}, ${changes.screen_name})`;
 			await audit(a, "edit_profile", id, changes);
 			return {};
 		},
@@ -288,7 +288,7 @@ const ACTIONS: Record<string, Action> = {
 			const kind = b.translator || null;
 			if (kind !== null && !["translator", "moderator", "approver"].includes(kind)) throw new AdminError("Unknown translator badge.");
 			await guard(a, id);
-			await sql`update users set translator = ${kind} where id = ${id}::bigint`;
+			await sql`update users set translator = ${kind} where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "set_translator", id, { translator: kind });
 			return {};
 		},
@@ -302,12 +302,12 @@ const ACTIONS: Record<string, Action> = {
 			await guard(a, id);
 			// an account stops being an organisation when it loses the gold or grey (government) badge
 			if (badge !== "business" && badge !== "government") {
-				await sql`delete from affiliations where org_id = ${id}::bigint`;
-				await sql`delete from affiliation_requests where org_id = ${id}::bigint`;
+				await sql`delete from affiliations where org_id = ${sql.cast(id, "bigint")}`;
+				await sql`delete from affiliation_requests where org_id = ${sql.cast(id, "bigint")}`;
 			}
 			// verified_at: "Verified since" on the About page; a new badge type starts it again
-			await sql`update users set verified_at = case when ${badge}::text is null then null when verified_type is distinct from ${badge}::text then now() else verified_at end,
-				verified_type = ${badge} where id = ${id}::bigint`;
+			await sql`update users set verified_at = case when ${sql.cast(badge, "text")} is null then null when not ${sql.equal(sql`verified_type`, sql.cast(badge, "text"))} then now() else verified_at end,
+				verified_type = ${badge} where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "set_badge", id, { badge });
 			return {};
 		},
@@ -320,7 +320,7 @@ const ACTIONS: Record<string, Action> = {
 			const flag = b.flag || null;
 			if (flag !== null && !isFlag(flag)) throw new AdminError("Unknown flag.");
 			await guard(a, id);
-			await sql`update users set flag = ${flag} where id = ${id}::bigint`;
+			await sql`update users set flag = ${flag} where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "set_flag", id, { flag });
 			return {};
 		},
@@ -334,7 +334,7 @@ const ACTIONS: Record<string, Action> = {
 			if (!["active", "restricted", "limited", "suspended"].includes(status)) throw new AdminError("Unknown standing.");
 			if (id === a.id) throw new AdminError("You can't change your own standing.");
 			await guard(a, id);
-			await sql`update users set status = ${status}, status_until = null, status_restore = null, deactivated_at = null where id = ${id}::bigint`;
+			await sql`update users set status = ${status}, status_until = null, status_restore = null, deactivated_at = null where id = ${sql.cast(id, "bigint")}`;
 			if (status === "suspended") await shutOut(id);
 			await audit(a, "set_status", id, { status, reason: String(b.reason ?? "").slice(0, 500) || undefined });
 			return {};
@@ -348,12 +348,12 @@ const ACTIONS: Record<string, Action> = {
 			const role = b.role || null;
 			if (role !== null && !(role in RANK)) throw new AdminError("Unknown role.");
 			if (id === a.id && role !== "admin") {
-				const [{ n }] = await sql`select count(*)::int as n from users where role = 'admin'`;
+				const [{ n }] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from users where role = 'admin'`;
 				if (n <= 1) throw new AdminError("You are the last admin.");
 			}
 			// nobody demotes staff at or above their own rank, the owner included
 			await guard(a, id);
-			await sql`update users set role = ${role}, role_granted_by = ${role ? a.id : null}::bigint where id = ${id}::bigint`;
+			await sql`update users set role = ${role}, role_granted_by = ${sql.cast(role ? a.id : null, "bigint")} where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "set_role", id, { role });
 			return {};
 		},
@@ -365,8 +365,8 @@ const ACTIONS: Record<string, Action> = {
 			const id = idOf(b.id);
 			await guard(a, id);
 			const password = randomPassword();
-			await sql`update users set password_hash = ${await Bun.password.hash(password)} where id = ${id}::bigint`;
-			await sql`delete from sessions where user_id = ${id}::bigint`;
+			await sql`update users set password_hash = ${await Bun.password.hash(password)} where id = ${sql.cast(id, "bigint")}`;
+			await sql`delete from sessions where user_id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "reset_password", id);
 			return { password };
 		},
@@ -377,7 +377,7 @@ const ACTIONS: Record<string, Action> = {
 		run: async (a, b) => {
 			const id = idOf(b.id);
 			await guard(a, id);
-			const rows = await sql`delete from sessions where user_id = ${id}::bigint returning token`;
+			const rows = await sql`delete from sessions where user_id = ${sql.cast(id, "bigint")} returning token`;
 			await audit(a, "sign_out", id, { sessions: rows.length });
 			return { sessions: rows.length };
 		},
@@ -391,7 +391,7 @@ const ACTIONS: Record<string, Action> = {
 			const u = await guard(a, id);
 			if (String(b.confirm ?? "").toLowerCase() !== u.screen_name.toLowerCase()) throw new AdminError("Type the handle to confirm.");
 			if (u.status === "suspended") await retireAccount(id, `deleted while suspended by @${a.screen_name}`);
-			await sql`delete from users where id = ${id}::bigint`;
+			await sql`delete from users where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "delete_account", id, { screen_name: u.screen_name });
 			return {};
 		},
@@ -415,7 +415,7 @@ const ACTIONS: Record<string, Action> = {
 			const password = randomPassword();
 			const id = newId();
 			await sql`insert into users (id, screen_name, name, password_hash, verified_type)
-				values (${id}::bigint, ${screenName}, ${name}, ${await Bun.password.hash(password)}, 'business')`;
+				values (${sql.cast(id, "bigint")}, ${screenName}, ${name}, ${await Bun.password.hash(password)}, 'business')`;
 			await audit(a, "create_org", id, { screen_name: screenName });
 			return { id, password };
 		},
@@ -425,7 +425,7 @@ const ACTIONS: Record<string, Action> = {
 		role: "support",
 		run: async (_a, b) => ({
 			affiliates: await sql`select ${userListCols} from affiliations af join users u on u.id = af.user_id
-				where af.org_id = ${idOf(b.orgId, "organisation")}::bigint order by af.created_at desc`,
+				where af.org_id = ${sql.cast(idOf(b.orgId, "organisation"), "bigint")} order by af.created_at desc`,
 		}),
 	},
 
@@ -433,13 +433,13 @@ const ACTIONS: Record<string, Action> = {
 		role: "admin",
 		run: async (a, b) => {
 			const orgId = idOf(b.orgId, "organisation");
-			const [org] = await sql`select verified_type from users where id = ${orgId}::bigint`;
+			const [org] = await sql`select verified_type from users where id = ${sql.cast(orgId, "bigint")}`;
 			if (org?.verified_type !== "business" && org?.verified_type !== "government") throw new AdminError("Only accounts with the gold or grey organisation badge are organisations.");
-			const [u] = await sql`select id::text as id from users where lower(screen_name) = lower(${String(b.screen_name ?? "").replace(/^@/, "")})`;
+			const [u] = await sql`select ${sql.cast(sql`id`, "text")} as id from users where lower(screen_name) = lower(${String(b.screen_name ?? "").replace(/^@/, "")})`;
 			if (!u) throw new AdminError("No account with that handle.");
 			if (u.id === orgId) throw new AdminError("An organisation can't be its own affiliate.");
 			// one organisation per person; adding moves them
-			await sql`insert into affiliations (org_id, user_id) values (${orgId}::bigint, ${u.id}::bigint)
+			await sql`insert into affiliations (org_id, user_id) values (${sql.cast(orgId, "bigint")}, ${sql.cast(u.id, "bigint")})
 				on conflict (user_id) do update set org_id = excluded.org_id, created_at = now()`;
 			await audit(a, "add_affiliate", u.id, { org: orgId });
 			return {};
@@ -451,7 +451,7 @@ const ACTIONS: Record<string, Action> = {
 		run: async (a, b) => {
 			const orgId = idOf(b.orgId, "organisation");
 			const userId = idOf(b.userId, "account");
-			await sql`delete from affiliations where org_id = ${orgId}::bigint and user_id = ${userId}::bigint`;
+			await sql`delete from affiliations where org_id = ${sql.cast(orgId, "bigint")} and user_id = ${sql.cast(userId, "bigint")}`;
 			await audit(a, "remove_affiliate", userId, { org: orgId });
 			return {};
 		},
@@ -462,14 +462,14 @@ const ACTIONS: Record<string, Action> = {
 		run: async (_a, b) => {
 			const q = String(b.q ?? "").trim();
 			const author = String(b.author ?? "").trim().replace(/^@/, "");
-			const match = sql`(${q} = '' or p.text ilike ${like(q)}) and (${author} = '' or lower(u.screen_name) = lower(${author}))`;
-			const rows = await sql`select p.id::text as id, p.text, p.created_at, p.hidden, p.sensitive, p.notice, p.count_overrides, p.reply_to_id::text as reply_to_id, u.screen_name, u.name,
-				(select count(*)::int from likes l where l.post_id = p.id) as likes,
-				(select count(*)::int from media m where m.post_id = p.id) as media
+			const match = sql`(${q} = '' or ${sql.like(sql`p.text`, like(q), true)}) and (${author} = '' or lower(u.screen_name) = lower(${author}))`;
+			const rows = await sql`select ${sql.cast(sql`p.id`, "text")} as id, p.text, p.created_at, p.hidden, p.sensitive, p.notice, p.count_overrides, ${sql.cast(sql`p.reply_to_id`, "text")} as reply_to_id, u.screen_name, u.name,
+				(select ${sql.cast(sql`count(*)`, "int")} from likes l where l.post_id = p.id) as likes,
+				(select ${sql.cast(sql`count(*)`, "int")} from media m where m.post_id = p.id) as media
 				from posts p join users u on u.id = p.user_id
 				where ${match}
 				order by p.id desc limit ${Math.min(Math.max(Number(b.limit) || 50, 1), 500)} offset ${Math.max(Number(b.offset) || 0, 0)}`;
-			const [{ total }] = await sql`select count(*)::int as total from posts p join users u on u.id = p.user_id where ${match}`;
+			const [{ total }] = await sql`select ${sql.cast(sql`count(*)`, "int")} as total from posts p join users u on u.id = p.user_id where ${match}`;
 			return { posts: rows, total };
 		},
 	},
@@ -478,10 +478,10 @@ const ACTIONS: Record<string, Action> = {
 		role: "moderator",
 		run: async (a, b) => {
 			const id = idOf(b.id, "post");
-			const [p] = await sql`select p.text, p.user_id::text as user_id from posts p where p.id = ${id}::bigint`;
+			const [p] = await sql`select p.text, ${sql.cast(sql`p.user_id`, "text")} as user_id from posts p where p.id = ${sql.cast(id, "bigint")}`;
 			if (!p) throw new AdminError("No such post.", 404);
 			await guard(a, p.user_id);
-			await sql`delete from posts where id = ${id}::bigint`;
+			await sql`delete from posts where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "delete_post", p.user_id, { post: id, text: p.text.slice(0, 280) });
 			return {};
 		},
@@ -491,13 +491,15 @@ const ACTIONS: Record<string, Action> = {
 		role: "support",
 		run: async (_a, b) => {
 			const status = ["open", "dismissed", "actioned"].includes(b.status) ? b.status : "open";
-			const rows = await sql`select r.id::text as id, r.reason, r.details, r.status, r.note, r.created_at, r.handled_at,
-				r.post_id::text as post_id, p.text as post_text, p.created_at as post_created_at,
-				(select count(*)::int from media m where m.post_id = r.post_id) as post_media,
+			const rows = await sql`select ${sql.cast(sql`r.id`, "text")} as id, r.reason, r.details, r.status, r.note, r.created_at, r.handled_at,
+				${sql.cast(sql`
+				r.post_id`, "text")} as post_id, p.text as post_text, p.created_at as post_created_at,
+				(select ${sql.cast(sql`count(*)`, "int")} from media m where m.post_id = r.post_id) as post_media,
 				rep.screen_name as reporter, h.screen_name as handled_by,
-				u.id::text as user_id, u.screen_name, u.name, u.avatar_url, u.verified_type, u.flag, u.status as user_status, u.role,
-				(select count(*)::int from reports o where o.user_id = r.user_id and o.status = 'open' and o.id <> r.id) as other_open,
-				(select count(*)::int from reports o where o.user_id = r.user_id and o.status = 'actioned') as actioned_before
+				${sql.cast(sql`
+				u.id`, "text")} as user_id, u.screen_name, u.name, u.avatar_url, u.verified_type, u.flag, u.status as user_status, u.role,
+				(select ${sql.cast(sql`count(*)`, "int")} from reports o where o.user_id = r.user_id and o.status = 'open' and o.id <> r.id) as other_open,
+				(select ${sql.cast(sql`count(*)`, "int")} from reports o where o.user_id = r.user_id and o.status = 'actioned') as actioned_before
 				from reports r left join users u on u.id = r.user_id left join posts p on p.id = r.post_id
 				left join users rep on rep.id = r.reporter_id left join users h on h.id = r.handled_by
 				where r.status = ${status} order by r.id ${status === "open" ? sql`asc` : sql`desc`} limit 100`;
@@ -511,12 +513,12 @@ const ACTIONS: Record<string, Action> = {
 			const id = idOf(b.id, "report");
 			const status = b.status === "dismissed" ? "dismissed" : "actioned";
 			const note = String(b.note ?? "").slice(0, 1000);
-			const rows = await sql`update reports set status = ${status}, note = ${note}, handled_by = ${a.id}::bigint, handled_at = now()
-				where id = ${id}::bigint returning user_id::text as user_id`;
+			const rows = await sql`update reports set status = ${status}, note = ${note}, handled_by = ${sql.cast(a.id, "bigint")}, handled_at = now()
+				where id = ${sql.cast(id, "bigint")} returning ${sql.cast(sql`user_id`, "text")} as user_id`;
 			if (!rows.length) throw new AdminError("No such report.", 404);
 			// other open reports about the same post close with it
-			if (b.samePost) await sql`update reports set status = ${status}, note = ${note}, handled_by = ${a.id}::bigint, handled_at = now()
-				where status = 'open' and post_id = (select post_id from reports where id = ${id}::bigint)`;
+			if (b.samePost) await sql`update reports set status = ${status}, note = ${note}, handled_by = ${sql.cast(a.id, "bigint")}, handled_at = now()
+				where status = 'open' and post_id = (select post_id from reports where id = ${sql.cast(id, "bigint")})`;
 			await audit(a, status === "dismissed" ? "dismiss_report" : "action_report", rows[0].user_id, { report: id, note: note || undefined });
 			return {};
 		},
@@ -527,7 +529,7 @@ const ACTIONS: Record<string, Action> = {
 		run: async () => ({
 			invites: await sql`select i.code, i.max_uses, i.uses, i.expires_at, i.revoked, i.created_at,
 				c.screen_name as created_by, o.screen_name as org,
-				(select coalesce(json_agg(u.screen_name order by u.created_at), '[]') from users u where u.invite_code = i.code) as used_by
+				(select coalesce(${sql.jsonAgg(sql`u.screen_name`, sql`u.created_at`, false)}, '[]') from users u where u.invite_code = i.code) as used_by
 				from invites i left join users c on c.id = i.created_by left join users o on o.id = i.org_id
 				order by i.created_at desc limit 200`,
 		}),
@@ -628,7 +630,7 @@ const ACTIONS: Record<string, Action> = {
 			}
 			if (Array.isArray(b.default_follows)) {
 				const handles = [...new Set(b.default_follows.map((h: unknown) => String(h).trim().replace(/^@/, "")).filter(Boolean))] as string[];
-				const found = handles.length ? await sql`select screen_name from users where lower(screen_name) = any(${sql.array(handles.map((h) => h.toLowerCase()), "TEXT")})` : [];
+				const found = handles.length ? await sql`select screen_name from users where ${sql.contains(sql.array(handles.map((h) => h.toLowerCase()), "TEXT"), sql`lower(screen_name)`)}` : [];
 				const missing = handles.filter((h) => !found.some((f: any) => f.screen_name.toLowerCase() === h.toLowerCase()));
 				if (missing.length) throw new AdminError(`No account named ${missing.map((m) => `@${m}`).join(", ")}.`);
 				await setSetting("default_follows", found.map((f: any) => f.screen_name));
@@ -676,10 +678,10 @@ const ACTIONS: Record<string, Action> = {
 			const who = typeof b.target === "string" ? b.target.trim().replace(/^@/, "").slice(0, 15) : "";
 			const offset = Math.max(0, Math.min(Number(b.offset) || 0, 100_000));
 			return {
-				entries: await sql`select l.id::text as id, l.action, l.target, l.detail, l.created_at, a.screen_name as actor, l.actor_id is null as automatic,
+				entries: await sql`select ${sql.cast(sql`l.id`, "text")} as id, l.action, l.target, l.detail, l.created_at, a.screen_name as actor, l.actor_id is null as automatic,
 					t.screen_name as target_name
 					from audit_log l left join users a on a.id = l.actor_id
-					left join users t on l.target ~ '^[0-9]+$' and t.id = l.target::bigint
+					left join users t on ${sql.regex(sql`l.target`, sql`'^[0-9]+$'`, false)} and t.id = ${sql.cast(sql`l.target`, "bigint")}
 					where ${action ? sql`l.action = ${action}` : sql`true`} and ${b.automatic ? sql`l.actor_id is null` : sql`true`}
 						and ${who ? sql`lower(t.screen_name) = lower(${who})` : sql`true`}
 					order by l.id desc limit 100 offset ${offset}`,

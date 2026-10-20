@@ -25,7 +25,7 @@ async function body(req: Request): Promise<Record<string, string>> {
 
 async function passwordMatches(userId: string, password: string | undefined): Promise<boolean> {
 	if (!password) return false;
-	const [u] = await sql`select password_hash from users where id = ${userId}::bigint`;
+	const [u] = await sql`select password_hash from users where id = ${sql.cast(userId, "bigint")}`;
 	return !!u && (await Bun.password.verify(password, u.password_hash).catch(() => false));
 }
 
@@ -35,9 +35,9 @@ export async function changeUsername(viewer: Viewer, wanted: string): Promise<st
 	if (problem) return problem;
 	if (isReserved(wanted)) return "That username is reserved.";
 	if (await handleHeld(wanted, viewer.id)) return "That username isn't available.";
-	const [renames] = await sql`select count(*)::int as n from username_changes where user_id = ${viewer.id}::bigint and changed_at > now() - interval '1 day'`;
+	const [renames] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from username_changes where user_id = ${sql.cast(viewer.id, "bigint")} and changed_at > now() - ${sql.duration(1, "day")}`;
 	if (renames.n >= 5) return "You've changed your username too often today. Try again tomorrow.";
-	const [taken] = await sql`select 1 from users where lower(screen_name) = lower(${wanted}) and id <> ${viewer.id}::bigint`;
+	const [taken] = await sql`select 1 from users where lower(screen_name) = lower(${wanted}) and id <> ${sql.cast(viewer.id, "bigint")}`;
 	if (taken) return "That username has been taken. Please choose another.";
 	const hate = hateInName(wanted);
 	if (hate) {
@@ -50,14 +50,14 @@ export async function changeUsername(viewer: Viewer, wanted: string): Promise<st
 		if (!viewer.role) await suspendForName(viewer.id, wanted);
 		return "That username isn't allowed here.";
 	}
-	await sql`insert into username_changes (user_id, old_name, new_name) values (${viewer.id}::bigint, ${viewer.screen_name}, ${wanted})`;
-	await sql`update users set screen_name = ${wanted} where id = ${viewer.id}::bigint`;
+	await sql`insert into username_changes (user_id, old_name, new_name) values (${sql.cast(viewer.id, "bigint")}, ${viewer.screen_name}, ${wanted})`;
+	await sql`update users set screen_name = ${wanted} where id = ${sql.cast(viewer.id, "bigint")}`;
 	return undefined;
 }
 
 export async function usernameAvailable(userId: string, wanted: string): Promise<{ available: boolean; suggestions: string[] }> {
 	const valid = !usernameProblem(wanted) && !isReserved(wanted) && !(await handleHeld(wanted, userId));
-	const [taken] = valid ? await sql`select 1 from users where lower(screen_name) = lower(${wanted}) and id <> ${userId}::bigint` : [{}];
+	const [taken] = valid ? await sql`select 1 from users where lower(screen_name) = lower(${wanted}) and id <> ${sql.cast(userId, "bigint")}` : [{}];
 	if (valid && !taken) return { available: true, suggestions: [] };
 	const base = wanted.replace(/[^A-Za-z0-9_]/g, "").slice(0, 11) || "user";
 	const suggestions: string[] = [];
@@ -80,9 +80,9 @@ export async function accountSettingsRoute(method: string, path: string, viewer:
 		if (next.length > 256) return error(214, "Passwords are at most 256 characters.");
 		if (next !== (f.password_confirmation ?? next)) return error(214, "The two passwords don't match.");
 		if (next === f.current_password) return error(214, "Your new password must be different from your current one.");
-		await sql`update users set password_hash = ${await Bun.password.hash(next)} where id = ${viewer.id}::bigint`;
+		await sql`update users set password_hash = ${await Bun.password.hash(next)} where id = ${sql.cast(viewer.id, "bigint")}`;
 		// other devices have to sign in again with the new password
-		await sql`delete from sessions where user_id = ${viewer.id}::bigint and token <> ${viewer.token}`;
+		await sql`delete from sessions where user_id = ${sql.cast(viewer.id, "bigint")} and token <> ${viewer.token}`;
 		return Response.json({ status: "ok" });
 	}
 
@@ -95,9 +95,9 @@ export async function accountSettingsRoute(method: string, path: string, viewer:
 		const f = await body(req);
 		if (!(await passwordMatches(viewer.id, f.current_password ?? f.password))) return error(231, "Your password is incorrect.", 403);
 		if (viewer.role) return error(214, "Staff accounts can't be deactivated here.");
-		const [standing] = await sql`select status, status_until from users where id = ${viewer.id}::bigint`;
+		const [standing] = await sql`select status, status_until from users where id = ${sql.cast(viewer.id, "bigint")}`;
 		if (standing?.status !== "active" || standing.status_until) return error(214, "Your account can't be deactivated while a sanction is in effect.");
-		await sql`update users set status = 'suspended', deactivated_at = now() where id = ${viewer.id}::bigint`;
+		await sql`update users set status = 'suspended', deactivated_at = now() where id = ${sql.cast(viewer.id, "bigint")}`;
 		await shutOut(viewer.id);
 		const headers = new Headers();
 		for (const n of ["auth_token", "ct0"]) headers.append("set-cookie", `${n}=; Path=/; Max-Age=0`);
@@ -120,7 +120,7 @@ function describeAgent(ua: string | null): { name: string; icon: string } {
 }
 
 export async function sessionsList(viewer: Viewer) {
-	const rows = await sql`select token, user_agent, last_seen_at from sessions where user_id = ${viewer.id}::bigint order by last_seen_at desc`;
+	const rows = await sql`select token, user_agent, last_seen_at from sessions where user_id = ${sql.cast(viewer.id, "bigint")} order by last_seen_at desc`;
 	return rows.map((r: any) => {
 		const d = describeAgent(r.user_agent);
 		return {
@@ -143,13 +143,13 @@ export async function sessionsList(viewer: Viewer) {
 export async function revokeSessionsRoute(method: string, path: string, viewer: Viewer, req: Request): Promise<Response | undefined> {
 	if (method !== "POST") return undefined;
 	if (path === "/account/sessions/revoke_all") {
-		await sql`delete from sessions where user_id = ${viewer.id}::bigint and token <> ${viewer.token}`;
+		await sql`delete from sessions where user_id = ${sql.cast(viewer.id, "bigint")} and token <> ${viewer.token}`;
 		return Response.json({ status: "ok" });
 	}
 	if (path === "/account/sessions/revoke") {
 		const f = await body(req);
 		const wanted = f.hashed_token ?? f.token ?? f.session_token ?? "";
-		const rows = await sql`select token from sessions where user_id = ${viewer.id}::bigint`;
+		const rows = await sql`select token from sessions where user_id = ${sql.cast(viewer.id, "bigint")}`;
 		const hit = rows.find((r: any) => hashed(r.token) === wanted && r.token !== viewer.token);
 		if (hit) await sql`delete from sessions where token = ${hit.token}`;
 		return Response.json({ status: "ok" });

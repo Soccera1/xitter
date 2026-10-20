@@ -34,7 +34,7 @@ type Card = {
 	created_at: Date;
 };
 
-const cols = sql`id::text as id, kind, title, summary, category, query, image is not null as has_image, image_width, image_height,
+const cols = sql`${sql.cast(sql`id`, "text")} as id, kind, title, summary, category, query, image is not null as has_image, image_width, image_height,
 	home, away, home_score, away_score, state, clock, starts_at, created_at`;
 
 export async function activeCards(): Promise<Card[]> {
@@ -47,7 +47,7 @@ export async function listCards() {
 
 export async function cardImage(id: string) {
 	if (!isId(id)) return new Response(null, { status: 404 });
-	const [c] = await sql`select image, image_mime from explore_cards where id = ${id}::bigint and image is not null`;
+	const [c] = await sql`select image, image_mime from explore_cards where id = ${sql.cast(id, "bigint")} and image is not null`;
 	if (!c) return new Response(null, { status: 404 });
 	return new Response(new Uint8Array(c.image), { headers: { "content-type": c.image_mime, "cache-control": "no-cache", "x-content-type-options": "nosniff" } });
 }
@@ -88,17 +88,17 @@ export async function saveCard(b: Record<string, any>): Promise<string> {
 	if (b.removeImage) Object.assign(row, { image: null, image_mime: null, image_width: null, image_height: null });
 	if (b.id) {
 		if (!isId(b.id)) throw new CardError("No such card.");
-		const done = await sql`update explore_cards set ${sql(row)} where id = ${b.id}::bigint returning id`;
+		const done = await sql`update explore_cards set ${sql(row)} where id = ${sql.cast(b.id, "bigint")} returning id`;
 		if (!done.length) throw new CardError("No such card.");
 		return b.id;
 	}
 	const id = newId();
-	await sql`insert into explore_cards ${sql({ id, ...row })}`;
+	await sql`insert into explore_cards ${sql.insert({ id, ...row })}`;
 	return id;
 }
 
 export async function deleteCard(id: string) {
-	const done = await sql`delete from explore_cards where id = ${id}::bigint returning id`;
+	const done = await sql`delete from explore_cards where id = ${sql.cast(id, "bigint")} returning id`;
 	if (!done.length) throw new CardError("No such card.");
 }
 
@@ -145,7 +145,7 @@ export function cardsEntry(cards: Card[], sortIndex: string) {
 				eventSummaryUrl: searchUrl(c.query),
 				title: c.title,
 				supportingText: c.summary,
-				timeString: c.kind === "sports" ? c.category || "Sports" : `${c.category ? `${c.category} · ` : ""}${ago(c.created_at)}`,
+				timeString: `${c.category ? `${c.category} · ` : ""}${ago(c.created_at)}`,
 				...(c.has_image ? { image: { url: `${PUBLIC_ORIGIN}/public/card-${c.id}.img`, width: c.image_width ?? 1200, height: c.image_height ?? 675 } } : {}),
 			},
 			clientEventInfo: { component: "event_summary", element: c.kind === "sports" ? "score_event" : "news" },

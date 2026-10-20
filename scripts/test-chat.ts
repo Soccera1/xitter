@@ -108,7 +108,7 @@ try {
 		check(`${label}: recipient decrypts original event`, decoded.entry?.kind === expected || decoded.kind === expected);
 	}
 	await send(b, conversation, { 100: bin(crypto.getRandomValues(new Uint8Array(32))), 102: thrift.bool(false) });
-	await sql`update chat_members set accepted = false where conversation_id = ${conversation} and user_id = ${b.id}::bigint`;
+	await sql`update chat_members set accepted = false where conversation_id = ${conversation} and user_id = ${sql.cast(b.id, "bigint")}`;
 	const requestPreview = (await gql(b, "GetMessageRequestsPageQuery")).data.get_message_requests_page.message_request_items[0];
 	check("request preview never uses viewer's acceptance event", thrift.text(thrift.decode(thrift.fromBase64(requestPreview.encoded_message_create_event))[3]) === a.id);
 	await gql(b, "AcceptMessageRequestMutation", { targetUserId: a.id });
@@ -186,7 +186,7 @@ try {
 } finally {
 	for (const ws of sockets) ws.close();
 	if (accounts.length) {
-		const uploads = await sql`select hash from chat_uploads where uploader_id = any(${sql.array(accounts.map((a) => a.id), "INT8")})`;
+		const uploads = await sql`select hash from chat_uploads where ${sql.contains(sql.array(accounts.map((a) => a.id), "INT8"), sql`uploader_id`)}`;
 		const root = resolve(process.env.MEDIA_DIR ?? "media", "chat");
 		for (const { hash } of uploads) {
 			const path = resolve(root, hash);
@@ -199,6 +199,6 @@ try {
 		await sql`delete from chat_members where conversation_id = ${id}`;
 		await sql`delete from chat_conversations where id = ${id}`;
 	}
-	for (const account of accounts) await sql`delete from users where id = ${account.id}::bigint`;
+	for (const account of accounts) await sql`delete from users where id = ${sql.cast(account.id, "bigint")}`;
 	await sql.close();
 }

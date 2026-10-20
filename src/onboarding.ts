@@ -194,8 +194,8 @@ async function form(req: Request): Promise<Record<string, string>> {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 async function pending(token: string): Promise<{ username: string; code: string } | undefined> {
 	if (!UUID.test(token)) return undefined;
-	await sql`delete from signup_sessions where created_at < now() - interval '30 minutes'`;
-	const [s] = await sql`select username, code from signup_sessions where token = ${token}::uuid`;
+	await sql`delete from signup_sessions where created_at < now() - ${sql.duration(30, "minute")}`;
+	const [s] = await sql`select username, code from signup_sessions where token = ${sql.cast(token, "uuid")}`;
 	return s;
 }
 const STALE = "That took too long. Go back and start again.";
@@ -255,7 +255,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 		// came by an invite link (server.ts keeps its code in a cookie)
 		const linked = /(?:^|;\s*)xitter_invite=([^;]+)/.exec(req.headers.get("cookie") ?? "")?.[1];
 		const code = linked && (await validCode(decodeURIComponent(linked)));
-		await sql`insert into signup_sessions (token, username, code) values (${token}::uuid, ${name}, ${code || ""})`;
+		await sql`insert into signup_sessions (token, username, code) values (${sql.cast(token, "uuid")}, ${name}, ${code || ""})`;
 		return respond(mode === "open" || code ? setupScreen(token, name) : fill(templates.code, { session_token: token }));
 	}
 	// the invite code, checked here and spent when the account is made
@@ -267,7 +267,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 		if (!answered.unknown) {
 			if (!answered.userId) return respond(fieldError("code", answered.error ?? "That code isn't right."));
 			const session = await startSession(answered.userId);
-			const [user] = await sql`select screen_name from users where id = ${session.userId}::bigint`;
+			const [user] = await sql`select screen_name from users where id = ${sql.cast(session.userId, "bigint")}`;
 			const headers = new Headers();
 			for (const c of await signInCookies(req, session)) headers.append("set-cookie", c);
 			return respond(fill(templates.success, { user_id: session.userId, username: user.screen_name }), false, headers);
@@ -275,7 +275,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 		const s = await pending(token);
 		if (!s) return respond(fieldError("code", STALE));
 		// the code mailed at sign-up: the account is made once it's right
-		const [held] = await sql`select pending from signup_sessions where token = ${token}::uuid and pending is not null`;
+		const [held] = await sql`select pending from signup_sessions where token = ${sql.cast(token, "uuid")} and pending is not null`;
 		if (held) {
 			const result = await checkSignupCode(token, String(f.code ?? ""));
 			if (result !== "ok") return respond(fieldError("code", result === "wrong" ? "That code isn't right." : "That code has expired. Go back and start again."));
@@ -287,7 +287,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 				if (e instanceof SignupError) return respond(fieldError("code", e.message));
 				throw e;
 			}
-			await sql`delete from signup_sessions where token = ${token}::uuid`;
+			await sql`delete from signup_sessions where token = ${sql.cast(token, "uuid")}`;
 			const session = await startSession(userId);
 			const headers = new Headers();
 			for (const c of await signInCookies(req, session)) headers.append("set-cookie", c);
@@ -296,7 +296,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 		}
 		const code = await validCode(String(f.code ?? ""));
 		if (!code) return respond(fieldError("code", "That invite code is not valid or has been used up."));
-		await sql`update signup_sessions set code = ${code} where token = ${token}::uuid`;
+		await sql`update signup_sessions set code = ${code} where token = ${sql.cast(token, "uuid")}`;
 		return respond(setupScreen(token, s.username));
 	}
 	if (path === "/onboarding/web/actions/verify_signup" || path === "/onboarding/web/actions/signup") {
@@ -316,7 +316,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 				return respond(fieldError(fieldOf(e), e.message));
 			}
 			const held = { ...checked, ip: given.ip, passwordHash: await Bun.password.hash(given.password), source: await platformSource(req), country: requestCountry(req) ?? null };
-			await sql`update signup_sessions set pending = ${JSON.stringify(held)}::text::jsonb where token = ${token}::uuid`;
+			await sql`update signup_sessions set pending = ${sql.cast(JSON.stringify(held), "jsonb")} where token = ${sql.cast(token, "uuid")}`;
 			if (!hit("mail", requestIp(req) ?? "unknown").ok) return respond(fieldError("email", "Too many codes sent from here. Wait an hour."));
 			try {
 				await sendSignupCode(token, checked.email);
@@ -341,7 +341,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 			const field = /email/i.test(e.message) ? "email" : /password/i.test(e.message) ? "password" : /name/i.test(e.message) && !/user/i.test(e.message) ? "name" : "username";
 			return respond(fieldError(field, e.message));
 		}
-		await sql`delete from signup_sessions where token = ${token}::uuid`;
+		await sql`delete from signup_sessions where token = ${sql.cast(token, "uuid")}`;
 		const session = await login(String(f.username ?? s.username), String(f.password ?? ""));
 		const headers = new Headers();
 		for (const c of await signInCookies(req, session!)) headers.append("set-cookie", c);
@@ -368,7 +368,7 @@ export async function onboarding(req: Request, path: string): Promise<Response |
 			if (username) hit("password", account);
 			return respond(fieldError("password", "Wrong username or password."));
 		}
-		const [user] = await sql`select screen_name from users where id = ${session.userId}::bigint`;
+		const [user] = await sql`select screen_name from users where id = ${sql.cast(session.userId, "bigint")}`;
 		const headers = new Headers();
 		for (const c of await signInCookies(req, session)) headers.append("set-cookie", c);
 		return respond(fill(templates.success, { user_id: session.userId, username: user.screen_name }), false, headers);

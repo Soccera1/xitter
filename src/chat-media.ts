@@ -21,7 +21,7 @@ export function chatMedia(authorize: Authorize, create: Authorize = authorize) {
 			const resume = newId();
 			await mkdir(join(directory, hash), { recursive: true });
 			await sql`insert into chat_uploads (hash, resume_id, conversation_id, message_id, uploader_id, total_bytes)
-				values (${hash}, ${resume}::bigint, ${String(vars.conversation_id)}, ${String(vars.message_id)}, ${v.id}::bigint, ${size})`;
+				values (${hash}, ${sql.cast(resume, "bigint")}, ${String(vars.conversation_id)}, ${String(vars.message_id)}, ${sql.cast(v.id, "bigint")}, ${size})`;
 			return { data: { xchat_initialize_media_upload: {
 				__typename: "InitializeMediaUploadResult", media_hash_key: hash, resume_id: resume,
 				resume_upload_url: `${PUBLIC_ORIGIN}/i/ton/data/xchat_media/${encodeURIComponent(vars.conversation_id)}/${hash}`,
@@ -30,8 +30,8 @@ export function chatMedia(authorize: Authorize, create: Authorize = authorize) {
 		FinalizeXChatMediaUploadMutation: async (v: Viewer, vars: Record<string, any>) => {
 			await authorize(v.id, String(vars.conversation_id));
 			return sql.begin(async (tx) => {
-				const [upload] = await tx`select * from chat_uploads where hash = ${String(vars.media_hash_key)} and uploader_id = ${v.id}::bigint
-					and conversation_id = ${String(vars.conversation_id)} and message_id = ${String(vars.message_id)} and resume_id::text = ${String(vars.resume_id)} for update`;
+				const [upload] = await tx`select * from chat_uploads where hash = ${String(vars.media_hash_key)} and uploader_id = ${tx.cast(v.id, "bigint")}
+					and conversation_id = ${String(vars.conversation_id)} and message_id = ${String(vars.message_id)} and ${tx.cast(tx`resume_id`, "text")} = ${String(vars.resume_id)} ${tx.lock(false)}`;
 				const count = Number(vars.num_parts);
 				let error: string | null = null;
 				if (!upload || !Number.isInteger(count) || count < 1 || count > 1024 || vars.is_public) error = "InvalidRequest";
@@ -96,7 +96,7 @@ export function chatMedia(authorize: Authorize, create: Authorize = authorize) {
 			chunks.push(result.value);
 		}
 		return sql.begin(async (tx) => {
-			const [current] = await tx`select ready from chat_uploads where hash = ${upload.hash} for update`;
+			const [current] = await tx`select ready from chat_uploads where hash = ${upload.hash} ${tx.lock(false)}`;
 			if (!current || current.ready) return new Response("upload finalized", { status: 409 });
 			const folder = join(directory, upload.hash);
 			const other = (await readdir(folder)).filter((name) => /^\d+\.part$/.test(name) && name !== `${Number(index)}.part`);

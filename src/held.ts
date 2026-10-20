@@ -32,11 +32,11 @@ export const forgetHeld = () => {
 async function heldNames(): Promise<Held[]> {
 	if (cache && Date.now() - cache.at < 60_000) return cache.held;
 	const rows = await sql`
-		select u.screen_name as name, u.id::text as user_id from users u where u.status = 'suspended' and u.deactivated_at is null and u.role is null
+		select u.screen_name as name, ${sql.cast(sql`u.id`, "text")} as user_id from users u where u.status = 'suspended' and u.deactivated_at is null and u.role is null
 		union all
-		select c.old_name, u.id::text from username_changes c join users u on u.id = c.user_id where u.status = 'suspended' and u.deactivated_at is null and u.role is null
+		select c.old_name, ${sql.cast(sql`u.id`, "text")} as id from username_changes c join users u on u.id = c.user_id where u.status = 'suspended' and u.deactivated_at is null and u.role is null
 		union all
-		select value, user_id::text from retired_identities where kind = 'handle'`;
+		select value, ${sql.cast(sql`user_id`, "text")} as user_id from retired_identities where kind = 'handle'`;
 	const held = rows.map((r: any) => ({
 		skeleton: skeleton(r.name),
 		userId: r.user_id,
@@ -58,16 +58,16 @@ export async function handleHeld(
 
 export async function retireAccount(userId: string, reason: string) {
 	const [u] =
-		await sql`select screen_name, email from users where id = ${userId}::bigint`;
+		await sql`select screen_name, email from users where id = ${sql.cast(userId, "bigint")}`;
 	if (!u) return;
 	const handles = [
 		u.screen_name,
 		...(
-			await sql`select old_name from username_changes where user_id = ${userId}::bigint`
+			await sql`select old_name from username_changes where user_id = ${sql.cast(userId, "bigint")}`
 		).map((r: any) => r.old_name),
 	];
 	const ips = (
-		await sql`select distinct ip from login_events where user_id = ${userId}::bigint and ip is not null and created_at > now() - interval '30 days'`
+		await sql`select distinct ip from login_events where user_id = ${sql.cast(userId, "bigint")} and ip is not null and created_at > now() - ${sql.duration(30, "day")}`
 	).map((r: any) => r.ip);
 	const rows = [
 		...handles.map((h) => ({ kind: "handle", value: h.toLowerCase() })),
@@ -77,7 +77,7 @@ export async function retireAccount(userId: string, reason: string) {
 		...ips.map((ip: string) => ({ kind: "ip", value: ip })),
 	];
 	for (const r of rows)
-		await sql`insert into retired_identities (kind, value, user_id, reason) values (${r.kind}, ${r.value}, ${userId}::bigint, ${reason})
+		await sql`insert into retired_identities (kind, value, user_id, reason) values (${r.kind}, ${r.value}, ${sql.cast(userId, "bigint")}, ${reason})
 			on conflict (kind, value) do update set created_at = now(), user_id = excluded.user_id, reason = excluded.reason`;
 	forgetHeld();
 }

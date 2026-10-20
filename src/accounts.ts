@@ -32,8 +32,8 @@ const multiTokens = (req: Request) => (parseCookies(req).auth_multi ?? "").split
 // and none of `except`'s.
 async function live(tokens: string[], except?: string): Promise<Session[]> {
 	if (!tokens.length) return [];
-	const rows = await sql`select s.token, s.csrf, s.user_id::text as "userId" from sessions s join users u on u.id = s.user_id
-		where s.token = any(${sql.array(tokens, "TEXT")}) and u.status <> 'suspended'`;
+	const rows = await sql`select s.token, s.csrf, ${sql.cast(sql`s.user_id`, "text")} as "userId" from sessions s join users u on u.id = s.user_id
+		where ${sql.contains(sql.array(tokens, "TEXT"), sql`s.token`)} and u.status <> 'suspended'`;
 	const seen = new Set(except ? [except] : []);
 	const out: Session[] = [];
 	for (const t of tokens) {
@@ -64,7 +64,7 @@ export async function accountsRoute(method: string, path: string, viewer: Viewer
 	if (path === "/1.1/account/multi/list.json") {
 		const others = await live(multiTokens(req), viewer.id);
 		const users = others.length
-			? await sql`select id::text, screen_name, name, avatar_url, verified_type from users where id = any(${sql.array(others.map((s) => s.userId), "INT8")})`
+			? await sql`select ${sql.cast(sql`id`, "text")} as id, screen_name, name, avatar_url, verified_type from users where ${sql.contains(sql.array(others.map((s) => s.userId), "INT8"), sql`id`)}`
 			: [];
 		return Response.json({
 			users: others.map((s) => {

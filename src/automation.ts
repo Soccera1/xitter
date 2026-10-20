@@ -16,12 +16,12 @@ export const automationHandlers: Record<string, (v: Viewer, vars: Vars) => Promi
 	// the settings page reads account_label.managed_label.owner_screen_name
 	UserAccountLabel: async (v, vars) => {
 		const id = /^\d{1,19}$/.test(String(vars.rest_id ?? "")) ? String(vars.rest_id) : v.id;
-		const [u] = await sql`select (select m.screen_name from users m where m.id = u.automated_by) as owner from users u where u.id = ${id}::bigint`;
+		const [u] = await sql`select (select m.screen_name from users m where m.id = u.automated_by) as owner from users u where u.id = ${sql.cast(id, "bigint")}`;
 		if (!u) throw new PostError("User not found.", 50);
 		return { data: { user: { result: { __typename: "User", account_label: u.owner ? { managed_label: { owner_screen_name: u.owner } } : {} } } } };
 	},
 	DisableUserAccountLabel: async (v) => {
-		await sql`update users set automated_by = null where id = ${v.id}::bigint`;
+		await sql`update users set automated_by = null where id = ${sql.cast(v.id, "bigint")}`;
 		return { data: { disable_user_account_label: "Done" } };
 	},
 };
@@ -47,7 +47,7 @@ function automationPage(req: Request, viewer: Viewer, owner: string | null, erro
 }
 
 export async function automationRoute(req: Request, viewer: Viewer): Promise<Response> {
-	const [me] = await sql`select (select m.screen_name from users m where m.id = u.automated_by) as owner from users u where u.id = ${viewer.id}::bigint`;
+	const [me] = await sql`select (select m.screen_name from users m where m.id = u.automated_by) as owner from users u where u.id = ${sql.cast(viewer.id, "bigint")}`;
 	const current: string | null = me?.owner ?? null;
 	if (req.method !== "POST") return automationPage(req, viewer, current);
 	const f = await req.formData().catch(() => undefined);
@@ -58,7 +58,7 @@ export async function automationRoute(req: Request, viewer: Viewer): Promise<Res
 	// the same tries as signing in to that account
 	const account = name.toLowerCase();
 	if (used("password", account)) return automationPage(req, viewer, current, "Too many tries for that account. Wait 15 minutes.");
-	const [owner] = await sql`select id::text, screen_name, password_hash, status, automated_by from users where lower(screen_name) = ${account}`;
+	const [owner] = await sql`select ${sql.cast(sql`id`, "text")} as id, screen_name, password_hash, status, automated_by from users where lower(screen_name) = ${account}`;
 	const ok = owner && (await Bun.password.verify(password, owner.password_hash).catch(() => false));
 	if (!ok) {
 		hit("password", account);
@@ -67,6 +67,6 @@ export async function automationRoute(req: Request, viewer: Viewer): Promise<Res
 	if (owner.id === viewer.id) return automationPage(req, viewer, current, "An account can't run itself. Pick the account of the person or team behind it.");
 	if (owner.status === "suspended") return automationPage(req, viewer, current, "That account is suspended.");
 	if (owner.automated_by) return automationPage(req, viewer, current, "That account is automated itself. The managing account has to be run by a person.");
-	await sql`update users set automated_by = ${owner.id}::bigint where id = ${viewer.id}::bigint`;
+	await sql`update users set automated_by = ${sql.cast(owner.id, "bigint")} where id = ${sql.cast(viewer.id, "bigint")}`;
 	return new Response(null, { status: 303, headers: { location: "/settings/account/automation" } });
 }

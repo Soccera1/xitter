@@ -37,7 +37,7 @@ export async function staffGate(req: Request, viewer: Viewer): Promise<string | 
 	const { staff_2fa, admin_ips } = settings().security;
 	if (!process.env.ADMIN_ANY_IP && !ipAllowed(clientIp(req), admin_ips)) return `The admin panel isn't open to your address (${clientIp(req) ?? "unknown"}).`;
 	if (staff_2fa) {
-		const [u] = await sql`select totp_enabled from users where id = ${viewer.id}::bigint`;
+		const [u] = await sql`select totp_enabled from users where id = ${sql.cast(viewer.id, "bigint")}`;
 		if (!u?.totp_enabled) return "Staff need two-factor authentication. Turn it on at /account/2fa, then come back.";
 	}
 	return null;
@@ -53,4 +53,4 @@ export const markStaff = () => {
 };
 
 export const staffViewer = (viewerId: string) =>
-	staffRequest.getStore()?.staff ? sql`exists (select 1 from users staff where staff.id = ${viewerId}::bigint and staff.role is not null)` : sql`false`;
+	staffRequest.getStore()?.staff ? sql`exists (select 1 from users staff where staff.id = ${sql.cast(viewerId, "bigint")} and staff.role is not null)` : sql`false`;

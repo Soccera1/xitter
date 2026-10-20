@@ -100,7 +100,7 @@ export async function reportFlow(viewer: Viewer, url: URL, body: any): Promise<R
 	if (url.searchParams.get("flow_name") || !body?.flow_token) {
 		let { postId, userId } = target(body);
 		if (postId && !userId) {
-			const [p] = await sql`select user_id::text as user_id from posts where id = ${postId}::bigint`;
+			const [p] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id from posts where id = ${sql.cast(postId, "bigint")}`;
 			userId = p?.user_id ?? null;
 		}
 		const draft = { reporter: viewer.id, postId, userId, at: now };
@@ -120,13 +120,13 @@ export async function reportFlow(viewer: Viewer, url: URL, body: any): Promise<R
 	if (details && draft.reason) {
 		const textIn = details.link === "skip_link" ? "" : String(details.text ?? "").slice(0, 1000);
 		// a resent last step files once
-		const [dupe] = await sql`select 1 from reports where reporter_id = ${viewer.id}::bigint and post_id is not distinct from ${draft.postId}::bigint
-			and user_id is not distinct from ${draft.userId}::bigint and reason = ${draft.reason} and created_at > now() - interval '1 minute'`;
-		const [recent] = await sql`select count(*)::int as n from reports where reporter_id = ${viewer.id}::bigint and created_at > now() - interval '1 hour'`;
+		const [dupe] = await sql`select 1 from reports where reporter_id = ${sql.cast(viewer.id, "bigint")} and ${sql.equal(sql`post_id`, sql.cast(draft.postId, "bigint"))}
+			and ${sql.equal(sql`user_id`, sql.cast(draft.userId, "bigint"))} and reason = ${draft.reason} and created_at > now() - ${sql.duration(1, "minute")}`;
+		const [recent] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from reports where reporter_id = ${sql.cast(viewer.id, "bigint")} and created_at > now() - ${sql.duration(1, "hour")}`;
 		if (recent.n >= 30) return Response.json({ errors: [{ code: 88, message: "You've sent a lot of reports. Try again later." }] }, { status: 429 });
 		if (!dupe) {
 			await sql`insert into reports (id, reporter_id, post_id, user_id, reason, details)
-				values (${newId()}::bigint, ${viewer.id}::bigint, ${draft.postId}::bigint, ${draft.userId}::bigint, ${draft.reason}, ${textIn})`;
+				values (${sql.cast(newId(), "bigint")}, ${sql.cast(viewer.id, "bigint")}, ${sql.cast(draft.postId, "bigint")}, ${sql.cast(draft.userId, "bigint")}, ${draft.reason}, ${textIn})`;
 		}
 		return Response.json(flow(String(body.flow_token), doneStep()));
 	}

@@ -13,8 +13,8 @@ import { settings } from "./settings";
 async function blocker(viewer: Viewer): Promise<{ reason: string | null; made: number }> {
 	const q = settings().invite_quota;
 	const [u] = await sql`select status, created_at,
-		(select count(*)::int from invites i where i.created_by = users.id and i.created_at > now() - interval '30 days') as made
-		from users where id = ${viewer.id}::bigint`;
+		(select ${sql.cast(sql`count(*)`, "int")} from invites i where i.created_by = users.id and i.created_at > now() - ${sql.duration(30, "day")}) as made
+		from users where id = ${sql.cast(viewer.id, "bigint")}`;
 	const made: number = u?.made ?? 0;
 	if (settings().signup_mode === "open") return { reason: "Anyone can sign up here right now, so there's no need for an invite.", made };
 	if (settings().signup_mode === "closed") return { reason: "Sign-up is closed, so invites can't be used.", made };
@@ -30,8 +30,8 @@ async function view(req: Request, viewer: Viewer, notice = "", error = "") {
 	const q = settings().invite_quota;
 	const { reason, made } = await blocker(viewer);
 	const mine = await sql`select i.code, i.uses, i.max_uses, i.expires_at, i.revoked, i.created_at,
-		(select coalesce(json_agg(u.screen_name order by u.created_at), '[]') from users u where u.invite_code = i.code) as used_by
-		from invites i where i.created_by = ${viewer.id}::bigint order by i.created_at desc limit 50`;
+		(select coalesce(${sql.jsonAgg(sql`u.screen_name`, sql`u.created_at`, false)}, '[]') from users u where u.invite_code = i.code) as used_by
+		from invites i where i.created_by = ${sql.cast(viewer.id, "bigint")} order by i.created_at desc limit 50`;
 	const state = (i: any) =>
 		i.revoked ? "withdrawn" : i.uses >= i.max_uses ? "used" : i.expires_at && new Date(i.expires_at) < new Date() ? "expired" : `open until ${new Date(i.expires_at ?? Date.now()).toDateString()}`;
 	return accountPage({

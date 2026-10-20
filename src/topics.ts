@@ -1,3 +1,4 @@
+import type { Fragment } from "./db/query";
 // Topics: subjects staff define with a few keywords. People follow them from
 // the sidebar's "Topics to follow" and from a post's menu; "For you" then
 // lifts posts that match a followed topic and labels the ones from accounts
@@ -28,23 +29,23 @@ export function cleanKeywords(input: unknown): string[] {
 
 // a post's text against a topic row t; the keywords are letters, digits, _ and spaces only
 const pattern = sql`('(^|[^[:alnum:]_])#?(' || array_to_string(t.keywords, '|') || ')([^[:alnum:]_]|$)')`;
-const matches = (postId: ReturnType<typeof sql>) => sql`(select x.text from posts x where x.id = ${postId}) ~* ${pattern}`;
+const matches = (postId: Fragment) => sql.regex(sql`(select x.text from posts x where x.id = ${postId})`, pattern, true);
 
 // For ranking (f is feed_items): the post matches a topic the viewer follows
-export const followedTopicMatch = (viewerId: string, postId: ReturnType<typeof sql>) =>
-	sql`exists (select 1 from topics t join topic_follows tf on tf.topic_id = t.id and tf.user_id = ${viewerId}::bigint where ${matches(postId)})`;
+export const followedTopicMatch = (viewerId: string, postId: Fragment) =>
+	sql`exists (select 1 from topics t join topic_follows tf on tf.topic_id = t.id and tf.user_id = ${sql.cast(viewerId, "bigint")} where ${matches(postId)})`;
 // ...and a post from someone they don't follow that matches a topic they're not interested in
-export const unwantedTopicMatch = (viewerId: string, postId: ReturnType<typeof sql>, authorId: ReturnType<typeof sql>) =>
-	sql`(${authorId} <> ${viewerId}::bigint and ${authorId} not in (select followee_id from follows where follower_id = ${viewerId}::bigint)
-		and exists (select 1 from topics t join topic_not_interested tn on tn.topic_id = t.id and tn.user_id = ${viewerId}::bigint where ${matches(postId)}))`;
+export const unwantedTopicMatch = (viewerId: string, postId: Fragment, authorId: Fragment) =>
+	sql`(${authorId} <> ${sql.cast(viewerId, "bigint")} and ${authorId} not in (select followee_id from follows where follower_id = ${sql.cast(viewerId, "bigint")})
+		and exists (select 1 from topics t join topic_not_interested tn on tn.topic_id = t.id and tn.user_id = ${sql.cast(viewerId, "bigint")} where ${matches(postId)}))`;
 
-const topicCols = (viewerId: string) => sql`t.id::text as id, t.name, t.description, t.keywords,
-	exists (select 1 from topic_follows tf where tf.topic_id = t.id and tf.user_id = ${viewerId}::bigint) as following,
-	exists (select 1 from topic_not_interested tn where tn.topic_id = t.id and tn.user_id = ${viewerId}::bigint) as not_interested`;
+const topicCols = (viewerId: string) => sql`${sql.cast(sql`t.id`, "text")} as id, t.name, t.description, t.keywords,
+	exists (select 1 from topic_follows tf where tf.topic_id = t.id and tf.user_id = ${sql.cast(viewerId, "bigint")}) as following,
+	exists (select 1 from topic_not_interested tn where tn.topic_id = t.id and tn.user_id = ${sql.cast(viewerId, "bigint")}) as not_interested`;
 
 export async function topicById(viewerId: string, id: string): Promise<Topic | undefined> {
 	if (!isId(id)) return undefined;
-	const [t] = await sql`select ${topicCols(viewerId)} from topics t where t.id = ${id}::bigint`;
+	const [t] = await sql`select ${topicCols(viewerId)} from topics t where t.id = ${sql.cast(id, "bigint")}`;
 	return t as Topic | undefined;
 }
 
@@ -63,13 +64,13 @@ export async function setTopicState(viewerId: string, id: string, what: "follow"
 	const topic = await topicById(viewerId, id);
 	if (!topic) throw new TopicError("No such topic.");
 	if (what === "follow") {
-		await sql`insert into topic_follows (user_id, topic_id) values (${viewerId}::bigint, ${id}::bigint) on conflict do nothing`;
-		await sql`delete from topic_not_interested where user_id = ${viewerId}::bigint and topic_id = ${id}::bigint`;
-	} else if (what === "unfollow") await sql`delete from topic_follows where user_id = ${viewerId}::bigint and topic_id = ${id}::bigint`;
+		await sql`insert into topic_follows (user_id, topic_id) values (${sql.cast(viewerId, "bigint")}, ${sql.cast(id, "bigint")}) on conflict do nothing`;
+		await sql`delete from topic_not_interested where user_id = ${sql.cast(viewerId, "bigint")} and topic_id = ${sql.cast(id, "bigint")}`;
+	} else if (what === "unfollow") await sql`delete from topic_follows where user_id = ${sql.cast(viewerId, "bigint")} and topic_id = ${sql.cast(id, "bigint")}`;
 	else if (what === "not_interested") {
-		await sql`insert into topic_not_interested (user_id, topic_id) values (${viewerId}::bigint, ${id}::bigint) on conflict do nothing`;
-		await sql`delete from topic_follows where user_id = ${viewerId}::bigint and topic_id = ${id}::bigint`;
-	} else await sql`delete from topic_not_interested where user_id = ${viewerId}::bigint and topic_id = ${id}::bigint`;
+		await sql`insert into topic_not_interested (user_id, topic_id) values (${sql.cast(viewerId, "bigint")}, ${sql.cast(id, "bigint")}) on conflict do nothing`;
+		await sql`delete from topic_follows where user_id = ${sql.cast(viewerId, "bigint")} and topic_id = ${sql.cast(id, "bigint")}`;
+	} else await sql`delete from topic_not_interested where user_id = ${sql.cast(viewerId, "bigint")} and topic_id = ${sql.cast(id, "bigint")}`;
 	return (await topicById(viewerId, id))!;
 }
 
@@ -77,10 +78,10 @@ export async function setTopicState(viewerId: string, id: string, what: "follow"
 // (most matching posts this week) first.
 export async function suggestedTopics(viewerId: string, limit = 6): Promise<Topic[]> {
 	return (await sql`select ${topicCols(viewerId)},
-			(select count(*) from posts p where p.created_at > now() - interval '7 days' and not p.hidden and p.user_id not in ${outOfView(viewerId)} and p.text ~* ${pattern}) as recent
+			(select count(*) from posts p where p.created_at > now() - ${sql.duration(7, "day")} and not p.hidden and p.user_id not in ${outOfView(viewerId)} and ${sql.regex(sql`p.text`, pattern, true)}) as recent
 		from topics t
-		where not exists (select 1 from topic_follows tf where tf.topic_id = t.id and tf.user_id = ${viewerId}::bigint)
-			and not exists (select 1 from topic_not_interested tn where tn.topic_id = t.id and tn.user_id = ${viewerId}::bigint)
+		where not exists (select 1 from topic_follows tf where tf.topic_id = t.id and tf.user_id = ${sql.cast(viewerId, "bigint")})
+			and not exists (select 1 from topic_not_interested tn where tn.topic_id = t.id and tn.user_id = ${sql.cast(viewerId, "bigint")})
 		order by recent desc, t.name limit ${limit}`) as Topic[];
 }
 
@@ -91,14 +92,14 @@ export async function topicsForPosts(viewerId: string, posts: { id: string; auth
 	const strangers = posts.filter((p) => p.authorId !== viewerId);
 	if (!strangers.length) return out;
 	const followed = new Set(
-		(await sql`select followee_id::text as id from follows where follower_id = ${viewerId}::bigint and followee_id = any(${sql.array(strangers.map((p) => p.authorId), "INT8")})`).map((r: any) => r.id),
+		(await sql`select ${sql.cast(sql`followee_id`, "text")} as id from follows where follower_id = ${sql.cast(viewerId, "bigint")} and ${sql.contains(sql.array(strangers.map((p) => p.authorId), "INT8"), sql`followee_id`)}`).map((r: any) => r.id),
 	);
 	const ids = strangers.filter((p) => !followed.has(p.authorId)).map((p) => p.id);
 	if (!ids.length) return out;
-	const rows = await sql`select * from (select p.id::text as post_id, ${topicCols(viewerId)}, row_number() over (partition by p.id order by t.name) as choice
-		from posts p join topics t on p.text ~* ${pattern}
-		join topic_follows tf on tf.topic_id = t.id and tf.user_id = ${viewerId}::bigint
-		where p.id = any(${sql.array(ids, "INT8")})) ranked where choice = 1 order by post_id, name`;
+	const rows = await sql`select * from (select ${sql.cast(sql`p.id`, "text")} as post_id, ${topicCols(viewerId)}, row_number() over (partition by p.id order by t.name) as choice
+		from posts p join topics t on ${sql.regex(sql`p.text`, pattern, true)}
+		join topic_follows tf on tf.topic_id = t.id and tf.user_id = ${sql.cast(viewerId, "bigint")}
+		where ${sql.contains(sql.array(ids, "INT8"), sql`p.id`)}) ranked where choice = 1 order by post_id, name`;
 	for (const r of rows as any[]) out.set(r.post_id, r);
 	return out;
 }
@@ -127,12 +128,12 @@ export const topicFeedbackActions = (t: Topic) => [
 	},
 ];
 
-export const topicContext = (t: Topic) => ({ type: "TimelineTopicContext", topic: topicResult(t), functionalityType: "Basic" });
+export const topicContext = (t: Topic) => ({ type: "TimelineTopicContext" as const, topic: topicResult(t), functionalityType: "Basic" });
 
 // admin panel
 export async function listTopics() {
-	return sql`select t.id::text as id, t.name, t.description, t.keywords, t.created_at,
-		(select count(*)::int from topic_follows tf where tf.topic_id = t.id) as followers
+	return sql`select ${sql.cast(sql`t.id`, "text")} as id, t.name, t.description, t.keywords, t.created_at,
+		(select ${sql.cast(sql`count(*)`, "int")} from topic_follows tf where tf.topic_id = t.id) as followers
 		from topics t order by t.name`;
 }
 
@@ -142,19 +143,19 @@ export async function saveTopic(b: { id?: string; name?: unknown; description?: 
 	const description = typeof b.description === "string" ? b.description.trim().slice(0, 200) : "";
 	const keywords = cleanKeywords(b.keywords);
 	if (!keywords.length) throw new TopicError("Give at least one keyword (letters, digits, spaces).");
-	const taken = await sql`select 1 from topics where lower(name) = lower(${name}) and id <> ${b.id ?? "0"}::bigint`;
+	const taken = await sql`select 1 from topics where lower(name) = lower(${name}) and id <> ${sql.cast(b.id ?? "0", "bigint")}`;
 	if (taken.length) throw new TopicError("There's already a topic with that name.");
 	if (b.id) {
-		const rows = await sql`update topics set name = ${name}, description = ${description}, keywords = ${sql.array(keywords, "TEXT")} where id = ${b.id}::bigint returning id::text`;
+		const rows = await sql`update topics set name = ${name}, description = ${description}, keywords = ${sql.array(keywords, "TEXT")} where id = ${sql.cast(b.id, "bigint")} returning ${sql.cast(sql`id`, "text")} as id`;
 		if (!rows.length) throw new TopicError("No such topic.");
 		return b.id;
 	}
 	const id = newId();
-	await sql`insert into topics (id, name, description, keywords) values (${id}::bigint, ${name}, ${description}, ${sql.array(keywords, "TEXT")})`;
+	await sql`insert into topics (id, name, description, keywords) values (${sql.cast(id, "bigint")}, ${name}, ${description}, ${sql.array(keywords, "TEXT")})`;
 	return id;
 }
 
 export async function deleteTopic(id: string) {
-	const rows = await sql`delete from topics where id = ${id}::bigint returning id`;
+	const rows = await sql`delete from topics where id = ${sql.cast(id, "bigint")} returning id`;
 	if (!rows.length) throw new TopicError("No such topic.");
 }

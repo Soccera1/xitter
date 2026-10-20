@@ -33,7 +33,7 @@ const self = (v: Viewer) => v.actor?.id ?? v.id;
 // Who may act as `ownerId` from `memberId`'s session, and in which role.
 async function membership(ownerId: string, memberId: string): Promise<Role | undefined> {
 	const [m] = await sql`select d.role from delegation_members d join users o on o.id = d.owner_id
-		where d.owner_id = ${ownerId}::bigint and d.member_id = ${memberId}::bigint and d.status = 'Accepted' and o.status <> 'suspended'`;
+		where d.owner_id = ${sql.cast(ownerId, "bigint")} and d.member_id = ${sql.cast(memberId, "bigint")} and d.status = 'Accepted' and o.status <> 'suspended'`;
 	return m?.role;
 }
 
@@ -80,7 +80,7 @@ const userResults = (u: ReturnType<typeof toUser>) => ({ id: globalId("UserResul
 
 async function usersById(viewerId: string, ids: string[]) {
 	if (!ids.length) return new Map<string, ReturnType<typeof toUser>>();
-	const rows = await sql`select ${userCols(viewerId)} from users u where u.id = any(${sql.array(ids, "BIGINT")})`;
+	const rows = await sql`select ${userCols(viewerId)} from users u where ${sql.contains(sql.array(ids, "BIGINT"), sql`u.id`)}`;
 	return new Map(rows.map((r: any) => [String(r.a_id), toUser(r)]));
 }
 
@@ -89,8 +89,8 @@ type Row = { id: string; owner_id: string; member_id: string; role: Role; status
 // groups (one per owner) with their members, as the client's DelegationGroup
 async function groupShapes(viewerId: string, ownerIds: string[], myRole?: Map<string, Role>) {
 	if (!ownerIds.length) return [];
-	const rows = (await sql`select id::text, owner_id::text, member_id::text, role, status from delegation_members
-		where owner_id = any(${sql.array(ownerIds, "BIGINT")}) order by created_at`) as Row[];
+	const rows = (await sql`select ${sql.cast(sql`id`, "text")} as id, ${sql.cast(sql`owner_id`, "text")} as owner_id, ${sql.cast(sql`member_id`, "text")} as member_id, role, status from delegation_members
+		where ${sql.contains(sql.array(ownerIds, "BIGINT"), sql`owner_id`)} order by created_at`) as Row[];
 	const users = await usersById(viewerId, [...new Set([...ownerIds, ...rows.map((r) => r.member_id)])]);
 	return ownerIds
 		.filter((o) => users.has(o))
@@ -115,10 +115,10 @@ async function groupShapes(viewerId: string, ownerIds: string[], myRole?: Map<st
 
 // the groups `memberId` belongs to, filtered like list_delegation_groups(roles, status)
 async function memberGroups(viewerId: string, memberId: string, roles: Role[] | undefined, status: "Pending" | "Accepted" | undefined) {
-	const rows = await sql`select d.owner_id::text, d.role from delegation_members d join users o on o.id = d.owner_id
-		where d.member_id = ${memberId}::bigint and o.status <> 'suspended'
+	const rows = await sql`select ${sql.cast(sql`d.owner_id`, "text")} as owner_id, d.role from delegation_members d join users o on o.id = d.owner_id
+		where d.member_id = ${sql.cast(memberId, "bigint")} and o.status <> 'suspended'
 		${status ? sql`and d.status = ${status}` : sql``}
-		${roles ? sql`and d.role = any(${sql.array(roles, "TEXT")})` : sql``}
+		${roles ? sql`and ${sql.contains(sql.array(roles, "TEXT"), sql`d.role`)}` : sql``}
 		order by d.created_at`;
 	return groupShapes(viewerId, rows.map((r: any) => r.owner_id), new Map(rows.map((r: any) => [r.owner_id, r.role])));
 }
@@ -139,7 +139,7 @@ function mayManage(v: Viewer, ownerId: string, roles: Role[]) {
 
 async function membershipRow(id: unknown): Promise<Row | undefined> {
 	if (!/^\d{1,19}$/.test(String(id ?? ""))) return undefined;
-	const [r] = await sql`select id::text, owner_id::text, member_id::text, role, status from delegation_members where id = ${String(id)}::bigint`;
+	const [r] = await sql`select ${sql.cast(sql`id`, "text")} as id, ${sql.cast(sql`owner_id`, "text")} as owner_id, ${sql.cast(sql`member_id`, "text")} as member_id, role, status from delegation_members where id = ${sql.cast(String(id), "bigint")}`;
 	return r as Row | undefined;
 }
 
@@ -148,17 +148,17 @@ async function invite(v: Viewer, ownerId: string, memberId: string, role: Role) 
 	mayManage(v, ownerId, [role]);
 	if (!/^\d{1,19}$/.test(memberId) || memberId === ownerId) throw new PostError("You can't add this account.", 214);
 	const [m] = await sql`select status, delegation_invites, automated_by,
-		exists (select 1 from follows f where f.follower_id = u.id and f.followee_id = ${ownerId}::bigint) as follows_owner
-		from users u where id = ${memberId}::bigint`;
+		exists (select 1 from follows f where f.follower_id = u.id and f.followee_id = ${sql.cast(ownerId, "bigint")}) as follows_owner
+		from users u where id = ${sql.cast(memberId, "bigint")}`;
 	if (!m || m.status === "suspended") throw new PostError("That account isn't available.", 144);
 	if (await isBlockedEitherWay(ownerId, memberId)) throw new PostError("You can't add this account.", 214);
 	// the invitee's own setting (Settings > Delegate)
 	if (m.delegation_invites === "Nobody" || (m.delegation_invites === "OnlyFollowing" && !m.follows_owner))
 		throw new PostError("This account doesn't accept delegation invites from you.", 214);
-	const [{ n }] = await sql`select count(*)::int as n from delegation_members where owner_id = ${ownerId}::bigint`;
+	const [{ n }] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from delegation_members where owner_id = ${sql.cast(ownerId, "bigint")}`;
 	if (n >= MAX_MEMBERS) throw new PostError(`An account can have up to ${MAX_MEMBERS} delegates.`, 214);
 	await sql`insert into delegation_members (id, owner_id, member_id, role, invited_by)
-		values (${newId()}::bigint, ${ownerId}::bigint, ${memberId}::bigint, ${role}, ${self(v)}::bigint)
+		values (${sql.cast(newId(), "bigint")}, ${sql.cast(ownerId, "bigint")}, ${sql.cast(memberId, "bigint")}, ${role}, ${sql.cast(self(v), "bigint")})
 		on conflict (owner_id, member_id) do update set role = excluded.role`;
 }
 
@@ -169,7 +169,7 @@ const memberList = async (v: Viewer, vars: { roles?: Role[]; status?: "Pending" 
 export const delegationHandlers: Record<string, (v: Viewer, vars: Vars) => Promise<unknown>> = {
 	// Settings > Delegate: the "Allow others to invite you" switch
 	DelegateQuery: async (v) => {
-		const [u] = await sql`select delegation_invites from users where id = ${v.id}::bigint`;
+		const [u] = await sql`select delegation_invites from users where id = ${sql.cast(v.id, "bigint")}`;
 		return {
 			data: {
 				viewer_v2: {
@@ -182,7 +182,7 @@ export const delegationHandlers: Record<string, (v: Viewer, vars: Vars) => Promi
 	useDelegateMutation_settings_Mutation: async (v, vars) => {
 		const setting = String(vars.invitationSetting ?? "");
 		if (!INVITE_SETTINGS.has(setting)) throw new PostError("Unknown setting.", 214);
-		await sql`update users set delegation_invites = ${setting} where id = ${v.id}::bigint`;
+		await sql`update users set delegation_invites = ${setting} where id = ${sql.cast(v.id, "bigint")}`;
 		return { data: { user_delegation_invitation_preferences_put: "Done" } };
 	},
 	// the account menu's "Delegated accounts" and the switch screen
@@ -203,7 +203,7 @@ export const delegationHandlers: Record<string, (v: Viewer, vars: Vars) => Promi
 	}),
 	GroupDetailDelegateQuery: async (v, vars) => {
 		const ownerId = String(vars.groupId ?? "");
-		const allowed = ownerId === v.id || (/^\d{1,19}$/.test(ownerId) && (await sql`select 1 from delegation_members where owner_id = ${ownerId}::bigint and member_id = ${self(v)}::bigint`).length > 0);
+		const allowed = ownerId === v.id || (/^\d{1,19}$/.test(ownerId) && (await sql`select 1 from delegation_members where owner_id = ${sql.cast(ownerId, "bigint")} and member_id = ${sql.cast(self(v), "bigint")}`).length > 0);
 		const [group] = allowed ? await groupShapes(v.id, [ownerId]) : [];
 		return { data: { viewer_v2: { id: globalId("Viewer", self(v)), user: viewerUser(v, self(v)) }, delegation_group: group ?? null } };
 	},
@@ -213,7 +213,7 @@ export const delegationHandlers: Record<string, (v: Viewer, vars: Vars) => Promi
 	}),
 	// the account picker in the add-member dialog
 	GroupsModalQuery: async (v) => {
-		const [u] = await sql`select ${userCols(v.id)} from users u where u.id = ${v.id}::bigint`;
+		const [u] = await sql`select ${userCols(v.id)} from users u where u.id = ${sql.cast(v.id, "bigint")}`;
 		return { data: { viewer_v2: { id: globalId("Viewer", v.id), user_results: userResults(toUser(u)) } } };
 	},
 	useAddMemberModalMutation_add_Mutation: async (v, vars) => {
@@ -226,11 +226,11 @@ export const delegationHandlers: Record<string, (v: Viewer, vars: Vars) => Promi
 		const role = vars.selectedRole as Role;
 		if (!ROLES.has(role)) throw new PostError("Pick Admin or Contributor.", 214);
 		// the client passes the membership's rest_id under "userId"; a member's own id works too
-		const row = (await membershipRow(vars.userId)) ?? (await sql`select id::text, owner_id::text, member_id::text, role, status from delegation_members
-			where owner_id = ${v.id}::bigint and member_id = ${/^\d{1,19}$/.test(String(vars.userId)) ? String(vars.userId) : "0"}::bigint`)[0];
+		const row = (await membershipRow(vars.userId)) ?? (await sql`select ${sql.cast(sql`id`, "text")} as id, ${sql.cast(sql`owner_id`, "text")} as owner_id, ${sql.cast(sql`member_id`, "text")} as member_id, role, status from delegation_members
+			where owner_id = ${sql.cast(v.id, "bigint")} and member_id = ${sql.cast(/^\d{1,19}$/.test(String(vars.userId)) ? String(vars.userId) : "0", "bigint")}`)[0];
 		if (!row) throw new PostError("No such member.", 144);
 		mayManage(v, row.owner_id, [row.role, role]);
-		await sql`update delegation_members set role = ${role} where id = ${row.id}::bigint`;
+		await sql`update delegation_members set role = ${role} where id = ${sql.cast(row.id, "bigint")}`;
 		return { data: { delegationmembership_role_put: "Done" } };
 	},
 	// the owner (or an Admin) withdraws a pending invite
@@ -238,7 +238,7 @@ export const delegationHandlers: Record<string, (v: Viewer, vars: Vars) => Promi
 		const row = await membershipRow(vars.membershipId);
 		if (!row) throw new PostError("No such invite.", 144);
 		mayManage(v, row.owner_id, [row.role]);
-		await sql`delete from delegation_members where id = ${row.id}::bigint and status = 'Pending'`;
+		await sql`delete from delegation_members where id = ${sql.cast(row.id, "bigint")} and status = 'Pending'`;
 		return { data: { delegation_membership_cancel: { id: globalId("DelegationMembership", row.id) } } };
 	},
 	// the owner (or an Admin) removes a member
@@ -246,27 +246,27 @@ export const delegationHandlers: Record<string, (v: Viewer, vars: Vars) => Promi
 		const row = await membershipRow(vars.membershipId);
 		if (!row) throw new PostError("No such member.", 144);
 		mayManage(v, row.owner_id, [row.role]);
-		await sql`delete from delegation_members where id = ${row.id}::bigint`;
+		await sql`delete from delegation_members where id = ${sql.cast(row.id, "bigint")}`;
 		return { data: { delegation_membership_delete: { id: globalId("DelegationGroup", row.owner_id) } } };
 	},
 	// a member leaves a group they belong to
 	GroupMenuMutation: async (v, vars) => {
 		const row = await membershipRow(vars.membershipId);
 		if (!row || row.member_id !== self(v)) throw new PostError("No such membership.", 144);
-		await sql`delete from delegation_members where id = ${row.id}::bigint`;
+		await sql`delete from delegation_members where id = ${sql.cast(row.id, "bigint")}`;
 		const [group] = await groupShapes(self(v), [row.owner_id]);
 		return { data: { delegation_membership_delete: { id: globalId("DelegationGroup", row.owner_id), members: group?.members ?? [] } } };
 	},
 	InviteMenu_accept_Mutation: async (v, vars) => {
 		const row = await membershipRow(vars.membershipId);
 		if (!row || row.member_id !== self(v)) throw new PostError("No such invite.", 144);
-		await sql`update delegation_members set status = 'Accepted' where id = ${row.id}::bigint`;
+		await sql`update delegation_members set status = 'Accepted' where id = ${sql.cast(row.id, "bigint")}`;
 		return { data: { delegationmembership_status_put: "Done" } };
 	},
 	InviteMenu_reject_Mutation: async (v, vars) => {
 		const row = await membershipRow(vars.membershipId);
 		if (!row || row.member_id !== self(v) || row.status !== "Pending") throw new PostError("No such invite.", 144);
-		await sql`delete from delegation_members where id = ${row.id}::bigint`;
+		await sql`delete from delegation_members where id = ${sql.cast(row.id, "bigint")}`;
 		return { data: { delegation_membership_reject: { id: globalId("DelegationMembership", row.id) } } };
 	},
 };

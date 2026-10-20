@@ -1,0 +1,11 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"types": ["bun"],
+		"skipLibCheck": true,
+		"noEmit": true
+	},
+	"include": ["src/**/*.ts", "scripts/*.test.ts", "scripts/check-queries.ts", "scripts/test-backends.ts"]
+}

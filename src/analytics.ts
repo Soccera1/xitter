@@ -32,31 +32,31 @@ const span = (from: number, to: number): [number, number] => {
 };
 
 // the start of the step (ms) an event falls in, counted in the database
-const bucketOf = (step: number) => sql`floor(extract(epoch from t.at) * 1000 / ${step})::bigint * ${step}`;
+const bucketOf = (step: number) => sql`${sql.cast(sql`floor(${sql.epoch(sql`t.at`)} * 1000 / ${step})`, "bigint")} * ${step}`;
 
 // Every engagement on the account's posts and profile, and its own new posts,
 // counted per (engagement_type, step, verified actor). The types are X's:
 // Displayed is an impression, Fav a like, ProfilePic a profile visit.
 const events = (userId: string, from: number, to: number, step: number, byVerified: boolean) => sql`
-	select t.type, ${step ? bucketOf(step) : sql`${from}::bigint`} as bucket,
-		${byVerified ? sql`coalesce(a.verified_type is not null, false)` : sql`false`} as verified, count(*)::int as count from (
+	select t.type, ${step ? bucketOf(step) : sql.cast(from, "bigint")} as bucket,
+		${byVerified ? sql`coalesce(a.verified_type is not null, false)` : sql`false`} as verified, ${sql.cast(sql`count(*)`, "int")} as count from (
 		select 'Displayed' as type, v.created_at as at, v.user_id as actor from post_views v join posts p on p.id = v.post_id
-			where p.user_id = ${userId}::bigint and v.user_id <> p.user_id
+			where p.user_id = ${sql.cast(userId, "bigint")} and v.user_id <> p.user_id
 		union all select 'Fav', l.created_at, l.user_id from likes l join posts p on p.id = l.post_id
-			where p.user_id = ${userId}::bigint and l.user_id <> p.user_id
+			where p.user_id = ${sql.cast(userId, "bigint")} and l.user_id <> p.user_id
 		union all select 'Retweet', r.created_at, r.user_id from reposts r join posts p on p.id = r.post_id
-			where p.user_id = ${userId}::bigint and r.user_id <> p.user_id
+			where p.user_id = ${sql.cast(userId, "bigint")} and r.user_id <> p.user_id
 		union all select 'Bookmark', b.created_at, b.user_id from bookmarks b join posts p on p.id = b.post_id
-			where p.user_id = ${userId}::bigint and b.user_id <> p.user_id
+			where p.user_id = ${sql.cast(userId, "bigint")} and b.user_id <> p.user_id
 		union all select 'Reply', r.created_at, r.user_id from posts r join posts p on p.id = r.reply_to_id
-			where p.user_id = ${userId}::bigint and r.user_id <> p.user_id
+			where p.user_id = ${sql.cast(userId, "bigint")} and r.user_id <> p.user_id
 		union all select 'QuoteTweet', q.created_at, q.user_id from posts q join posts p on p.id = q.quote_id
-			where p.user_id = ${userId}::bigint and q.user_id <> p.user_id
-		union all select 'Follow', f.created_at, f.follower_id from follows f where f.followee_id = ${userId}::bigint
-		union all select 'Unfollow', u.created_at, u.follower_id from unfollows u where u.followee_id = ${userId}::bigint
-		union all select 'ProfilePic', v.created_at, v.visitor_id from profile_visits v where v.profile_id = ${userId}::bigint
+			where p.user_id = ${sql.cast(userId, "bigint")} and q.user_id <> p.user_id
+		union all select 'Follow', f.created_at, f.follower_id from follows f where f.followee_id = ${sql.cast(userId, "bigint")}
+		union all select 'Unfollow', u.created_at, u.follower_id from unfollows u where u.followee_id = ${sql.cast(userId, "bigint")}
+		union all select 'ProfilePic', v.created_at, v.visitor_id from profile_visits v where v.profile_id = ${sql.cast(userId, "bigint")}
 		union all select case when p.reply_to_id is not null then 'ReplyCreate' when p.quote_id is not null then 'QuoteCreate' else 'TweetCreate' end,
-			p.created_at, p.user_id from posts p where p.user_id = ${userId}::bigint
+			p.created_at, p.user_id from posts p where p.user_id = ${sql.cast(userId, "bigint")}
 	) t left join users a on a.id = t.actor
 	where t.at >= ${new Date(from)} and t.at < ${new Date(to)}
 	group by 1, 2, 3`;
@@ -74,9 +74,10 @@ async function series(userId: string, from: number, to: number, granularity: "da
 // the older OrganicMetricsTimeSeries layout: one entry per day with named values
 async function followSeries(userId: string, from: number, to: number) {
 	const rows = await sql`select ${bucketOf(DAY)} as day,
-			count(*) filter (where t.type = 'Follow')::int as follows, count(*) filter (where t.type = 'Unfollow')::int as unfollows from (
-			select 'Follow' as type, f.created_at as at from follows f where f.followee_id = ${userId}::bigint
-			union all select 'Unfollow', u.created_at from unfollows u where u.followee_id = ${userId}::bigint
+			${sql.cast(sql`
+			count(*) filter (where t.type = 'Follow')`, "int")} as follows, ${sql.cast(sql`count(*) filter (where t.type = 'Unfollow')`, "int")} as unfollows from (
+			select 'Follow' as type, f.created_at as at from follows f where f.followee_id = ${sql.cast(userId, "bigint")}
+			union all select 'Unfollow', u.created_at from unfollows u where u.followee_id = ${sql.cast(userId, "bigint")}
 		) t where t.at >= ${new Date(from)} and t.at < ${new Date(to)}
 		group by 1 order by 1`;
 	return (rows as any[]).map((r) => ({
@@ -86,12 +87,16 @@ async function followSeries(userId: string, from: number, to: number) {
 }
 
 async function followers(userId: string) {
-	const [f] = await sql`select count(*)::int as followers,
-		count(*) filter (where u.verified_type is not null)::int as verified,
-		count(*) filter (where u.last_seen_at > now() - interval '28 days')::int as active,
-		count(*) filter (where u.last_seen_at > now() - interval '28 days' and u.verified_type is not null)::int as active_verified,
-		count(*) filter (where u.last_seen_at > now() - interval '1 day')::int as today
-		from follows f join users u on u.id = f.follower_id where f.followee_id = ${userId}::bigint`;
+	const [f] = await sql`select ${sql.cast(sql`count(*)`, "int")} as followers,
+		${sql.cast(sql`
+		count(*) filter (where u.verified_type is not null)`, "int")} as verified,
+		${sql.cast(sql`
+		count(*) filter (where u.last_seen_at > now() - ${sql.duration(28, "day")})`, "int")} as active,
+		${sql.cast(sql`
+		count(*) filter (where u.last_seen_at > now() - ${sql.duration(28, "day")} and u.verified_type is not null)`, "int")} as active_verified,
+		${sql.cast(sql`
+		count(*) filter (where u.last_seen_at > now() - ${sql.duration(1, "day")})`, "int")} as today
+		from follows f join users u on u.id = f.follower_id where f.followee_id = ${sql.cast(userId, "bigint")}`;
 	return {
 		verified_follower_count: f.verified,
 		author_follower_metrics: { active_followers: f.active, active_verified_followers: f.active_verified },
@@ -106,14 +111,14 @@ const viewerUser = (v: Viewer, fields: object) => ({
 
 // totals for a post, by the metric names the content table and post page ask for
 async function postTotals(postIds: string[]) {
-	const rows = await sql`select p.id::text,
-		(select count(*)::int from post_views v where v.post_id = p.id and v.user_id <> p.user_id) as "Impressions",
-		(select count(*)::int from likes l where l.post_id = p.id and l.user_id <> p.user_id) as "Likes",
-		(select count(*)::int from posts r where r.reply_to_id = p.id and r.user_id <> p.user_id) as "Replies",
-		(select count(*)::int from reposts r where r.post_id = p.id and r.user_id <> p.user_id)
-			+ (select count(*)::int from posts q where q.quote_id = p.id and q.user_id <> p.user_id) as "Retweets",
-		(select count(*)::int from bookmarks b where b.post_id = p.id and b.user_id <> p.user_id) as "Bookmark"
-		from posts p where p.id = any(${sql.array(postIds, "INT8")})`;
+	const rows = await sql`select ${sql.cast(sql`p.id`, "text")} as id,
+		(select ${sql.cast(sql`count(*)`, "int")} from post_views v where v.post_id = p.id and v.user_id <> p.user_id) as "Impressions",
+		(select ${sql.cast(sql`count(*)`, "int")} from likes l where l.post_id = p.id and l.user_id <> p.user_id) as "Likes",
+		(select ${sql.cast(sql`count(*)`, "int")} from posts r where r.reply_to_id = p.id and r.user_id <> p.user_id) as "Replies",
+		(select ${sql.cast(sql`count(*)`, "int")} from reposts r where r.post_id = p.id and r.user_id <> p.user_id)
+			+ (select ${sql.cast(sql`count(*)`, "int")} from posts q where q.quote_id = p.id and q.user_id <> p.user_id) as "Retweets",
+		(select ${sql.cast(sql`count(*)`, "int")} from bookmarks b where b.post_id = p.id and b.user_id <> p.user_id) as "Bookmark"
+		from posts p where ${sql.contains(sql.array(postIds, "INT8"), sql`p.id`)}`;
 	const out = new Map<string, Record<string, number>>();
 	for (const r of rows as any[]) {
 		const { id, ...m } = r;
@@ -160,7 +165,7 @@ async function mediaEntities(postIds: string[]) {
 // one of the viewer's own posts, or nothing: analytics are only for the author
 async function ownPost(v: Viewer, id: unknown) {
 	if (typeof id !== "string" || !/^\d{1,19}$/.test(id)) return undefined;
-	const [p] = await sql`select id::text, user_id::text, text, created_at, reply_to_id::text from posts where id = ${id}::bigint and user_id = ${v.id}::bigint`;
+	const [p] = await sql`select ${sql.cast(sql`id`, "text")} as id, ${sql.cast(sql`user_id`, "text")} as user_id, text, created_at, ${sql.cast(sql`reply_to_id`, "text")} as reply_to_id from posts where id = ${sql.cast(id, "bigint")} and user_id = ${sql.cast(v.id, "bigint")}`;
 	return p;
 }
 
@@ -172,10 +177,10 @@ async function postCard(v: Viewer, p: any) {
 	const [totals, media, author] = await Promise.all([postTotals([p.id]), mediaEntities([p.id]), userById(v.id, p.user_id)]);
 	const t = totals.get(p.id);
 	// the counts under the post are its public ones, the author's own included
-	const [c] = await sql`select (select count(*)::int from bookmarks where post_id = ${p.id}::bigint) as bookmark_count,
-		(select count(*)::int from likes where post_id = ${p.id}::bigint) as favorite_count,
-		(select count(*)::int from posts where reply_to_id = ${p.id}::bigint) as reply_count,
-		(select count(*)::int from reposts where post_id = ${p.id}::bigint) as retweet_count`;
+	const [c] = await sql`select (select ${sql.cast(sql`count(*)`, "int")} from bookmarks where post_id = ${sql.cast(p.id, "bigint")}) as bookmark_count,
+		(select ${sql.cast(sql`count(*)`, "int")} from likes where post_id = ${sql.cast(p.id, "bigint")}) as favorite_count,
+		(select ${sql.cast(sql`count(*)`, "int")} from posts where reply_to_id = ${sql.cast(p.id, "bigint")}) as reply_count,
+		(select ${sql.cast(sql`count(*)`, "int")} from reposts where post_id = ${sql.cast(p.id, "bigint")}) as retweet_count`;
 	return {
 		details: details(p),
 		url_entities: [],
@@ -231,8 +236,8 @@ export const analyticsHandlers = {
 		const now = Date.now();
 		const [from, to] = span(ms(vars.from_time, now - 7 * DAY), ms(vars.to_time, now));
 		const limit = Math.min(Math.max(Number(vars.max_results) || 100, 1), 1000);
-		const posts = await sql`select id::text, user_id::text, text, created_at, reply_to_id::text, community_id::text from posts
-			where user_id = ${v.id}::bigint and created_at >= ${new Date(from)} and created_at <= ${new Date(to)} order by id desc limit ${limit}`;
+		const posts = await sql`select ${sql.cast(sql`id`, "text")} as id, ${sql.cast(sql`user_id`, "text")} as user_id, text, created_at, ${sql.cast(sql`reply_to_id`, "text")} as reply_to_id, ${sql.cast(sql`community_id`, "text")} as community_id from posts
+			where user_id = ${sql.cast(v.id, "bigint")} and created_at >= ${new Date(from)} and created_at <= ${new Date(to)} order by id desc limit ${limit}`;
 		const ids = (posts as any[]).map((p) => p.id);
 		const [totals, media] = await Promise.all([postTotals(ids), mediaEntities(ids)]);
 		const me = await userById(v.id, v.id);
@@ -259,7 +264,7 @@ export const analyticsHandlers = {
 		const p = await ownPost(v, vars.rest_id);
 		if (!p) return tweetWrap(String(vars.rest_id ?? ""), undefined);
 		const card = await postCard(v, p);
-		const parent = p.reply_to_id ? (await sql`select id::text, user_id::text, text, created_at from posts where id = ${p.reply_to_id}::bigint`)[0] : undefined;
+		const parent = p.reply_to_id ? (await sql`select ${sql.cast(sql`id`, "text")} as id, ${sql.cast(sql`user_id`, "text")} as user_id, text, created_at from posts where id = ${sql.cast(p.reply_to_id, "bigint")}`)[0] : undefined;
 		const parentUser = parent ? await userById(v.id, parent.user_id) : undefined;
 		return tweetWrap(p.id, {
 			...card,
@@ -302,13 +307,13 @@ export const analyticsHandlers = {
 
 // one post's engagements per step (an hour or a day)
 async function postSeries(postId: string, from: number, to: number, step: number) {
-	const rows = await sql`select t.type, ${bucketOf(step)} as bucket, count(*)::int as count from (
-		select 'Displayed' as type, v.created_at as at from post_views v join posts p on p.id = v.post_id where v.post_id = ${postId}::bigint and v.user_id <> p.user_id
-		union all select 'Fav', l.created_at from likes l join posts p on p.id = l.post_id where l.post_id = ${postId}::bigint and l.user_id <> p.user_id
-		union all select 'Retweet', r.created_at from reposts r join posts p on p.id = r.post_id where r.post_id = ${postId}::bigint and r.user_id <> p.user_id
-		union all select 'Bookmark', b.created_at from bookmarks b join posts p on p.id = b.post_id where b.post_id = ${postId}::bigint and b.user_id <> p.user_id
-		union all select 'Reply', r.created_at from posts r join posts p on p.id = r.reply_to_id where r.reply_to_id = ${postId}::bigint and r.user_id <> p.user_id
-		union all select 'QuoteTweet', q.created_at from posts q join posts p on p.id = q.quote_id where q.quote_id = ${postId}::bigint and q.user_id <> p.user_id
+	const rows = await sql`select t.type, ${bucketOf(step)} as bucket, ${sql.cast(sql`count(*)`, "int")} as count from (
+		select 'Displayed' as type, v.created_at as at from post_views v join posts p on p.id = v.post_id where v.post_id = ${sql.cast(postId, "bigint")} and v.user_id <> p.user_id
+		union all select 'Fav', l.created_at from likes l join posts p on p.id = l.post_id where l.post_id = ${sql.cast(postId, "bigint")} and l.user_id <> p.user_id
+		union all select 'Retweet', r.created_at from reposts r join posts p on p.id = r.post_id where r.post_id = ${sql.cast(postId, "bigint")} and r.user_id <> p.user_id
+		union all select 'Bookmark', b.created_at from bookmarks b join posts p on p.id = b.post_id where b.post_id = ${sql.cast(postId, "bigint")} and b.user_id <> p.user_id
+		union all select 'Reply', r.created_at from posts r join posts p on p.id = r.reply_to_id where r.reply_to_id = ${sql.cast(postId, "bigint")} and r.user_id <> p.user_id
+		union all select 'QuoteTweet', q.created_at from posts q join posts p on p.id = q.quote_id where q.quote_id = ${sql.cast(postId, "bigint")} and q.user_id <> p.user_id
 	) t where t.at >= ${new Date(from)} and t.at < ${new Date(to)}
 		group by 1, 2`;
 	return (rows as any[])

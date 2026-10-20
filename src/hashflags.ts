@@ -21,8 +21,8 @@ const emojiUrl = (id: string, mime: string) => `${PUBLIC_ORIGIN}/public/hashflag
 // what the client fetches: running ones and those starting within a day (it
 // drops the rest itself), in the camel-case layout it reads
 export async function hashflagsJson() {
-	const rows = await sql`select id::text, hashtag, starts_at, ends_at, like_animation is not null as liked, emoji_mime, hashfetti from hashflags
-		where ends_at > now() and starts_at < now() + interval '1 day' order by starts_at`;
+	const rows = await sql`select ${sql.cast(sql`id`, "text")} as id, hashtag, starts_at, ends_at, like_animation is not null as liked, emoji_mime, hashfetti from hashflags
+		where ends_at > now() and starts_at < now() + ${sql.duration(1, "day")} order by starts_at`;
 	return rows.map((r: any) => ({
 		hashtag: r.hashtag,
 		startingTimestampMs: String(r.starts_at.getTime()),
@@ -37,7 +37,7 @@ export async function hashflagsJson() {
 // upload, so they can be cached for good
 export async function hashflagAsset(id: string, ext: string) {
 	if (BigInt(id) > 9223372036854775807n) return new Response(null, { status: 404 });
-	const [r] = await sql`select like_animation, emoji, emoji_mime from hashflags where id = ${id}::bigint`;
+	const [r] = await sql`select like_animation, emoji, emoji_mime from hashflags where id = ${sql.cast(id, "bigint")}`;
 	const cache = { "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff" };
 	if (r && ext === "json" && r.like_animation) return new Response(r.like_animation, { headers: { "content-type": "application/json", ...cache } });
 	if (r && ext !== "json" && r.emoji && EXT[r.emoji_mime] === ext) return new Response(new Uint8Array(r.emoji), { headers: { "content-type": r.emoji_mime, ...cache } });
@@ -75,7 +75,7 @@ export const hashflagActions: Record<string, Action> = {
 	hashflags: {
 		role: "support",
 		run: async () => ({
-			hashflags: (await sql`select id::text, hashtag, starts_at, ends_at, like_animation is not null as has_like, emoji_mime, hashfetti, created_at from hashflags order by ends_at desc`).map((r: any) => ({
+			hashflags: (await sql`select ${sql.cast(sql`id`, "text")} as id, hashtag, starts_at, ends_at, like_animation is not null as has_like, emoji_mime, hashfetti, created_at from hashflags order by ends_at desc`).map((r: any) => ({
 				...r,
 				like_url: r.has_like ? animationUrl(r.id) : null,
 				emoji_url: r.emoji_mime ? emojiUrl(r.id, r.emoji_mime) : null,
@@ -97,7 +97,7 @@ export const hashflagActions: Record<string, Action> = {
 			if (emoji && (!info || !EXT[info.mime] || info.width > 512 || info.height > 512)) throw new AdminError("The emoji is a PNG, GIF or WebP up to 512×512.");
 			const id = newId();
 			await sql`insert into hashflags (id, hashtag, starts_at, ends_at, like_animation, emoji, emoji_mime, hashfetti)
-				values (${id}::bigint, ${hashtag}, ${starts}, ${ends}, ${anim ? lottie(anim) : null}, ${emoji ?? null}, ${info?.mime ?? null}, ${!!b.hashfetti && !!emoji})`;
+				values (${sql.cast(id, "bigint")}, ${hashtag}, ${starts}, ${ends}, ${anim ? lottie(anim) : null}, ${emoji ?? null}, ${info?.mime ?? null}, ${!!b.hashfetti && !!emoji})`;
 			await audit(a, "create_hashflag", id, { hashtag, starts, ends });
 			return { id };
 		},
@@ -107,7 +107,7 @@ export const hashflagActions: Record<string, Action> = {
 		role: "admin",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			await sql`update hashflags set ends_at = greatest(starts_at + interval '1 second', now()) where id = ${id}::bigint and ends_at > now()`;
+			await sql`update hashflags set ends_at = ${sql.greatest(sql`starts_at + ${sql.duration(1, "second")}`, sql`now()`)} where id = ${sql.cast(id, "bigint")} and ends_at > now()`;
 			await audit(a, "end_hashflag", id);
 			return {};
 		},
@@ -116,7 +116,7 @@ export const hashflagActions: Record<string, Action> = {
 		role: "admin",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			await sql`delete from hashflags where id = ${id}::bigint`;
+			await sql`delete from hashflags where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "delete_hashflag", id);
 			return {};
 		},

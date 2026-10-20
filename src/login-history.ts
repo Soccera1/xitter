@@ -50,12 +50,12 @@ export async function recordSignIn(req: Request, session: { token: string; userI
 	const country = requestCountry(req) ?? null;
 	const app = (await platformSource(req)) ?? webSource();
 	await sql`insert into login_events (id, user_id, ip, country, app, user_agent)
-		values (${newId()}::bigint, ${session.userId}::bigint, ${ip}, ${country}, ${app}, ${(req.headers.get("user-agent") ?? "").slice(0, 500)})`;
+		values (${sql.cast(newId(), "bigint")}, ${sql.cast(session.userId, "bigint")}, ${ip}, ${country}, ${app}, ${(req.headers.get("user-agent") ?? "").slice(0, 500)})`;
 	await sql`update sessions set ip = ${ip} where token = ${session.token}`;
 }
 
 // newest first, as the settings page lists them
 export async function loginHistory(userId: string, limit = 50) {
-	const rows = await sql`select ip, country, app, created_at from login_events where user_id = ${userId}::bigint order by created_at desc limit ${limit}`;
+	const rows = await sql`select ip, country, app, created_at from login_events where user_id = ${sql.cast(userId, "bigint")} order by created_at desc limit ${limit}`;
 	return rows.map((r: any) => ({ app_name: r.app, time: r.created_at.toISOString(), ip: r.ip ?? "", country: r.country ? (countryName(r.country) ?? r.country) : null }));
 }

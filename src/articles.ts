@@ -123,7 +123,7 @@ function articleMedia(m: MediaRow) {
 async function mediaRows(ownerId: string, ids: string[]): Promise<Map<string, MediaRow>> {
 	if (!ids.length) return new Map();
 	const rows = await sql`select id, kind, mime, size, width, height, position, duration_ms from media
-		where id = any(${sql.array(ids, "INT8")}) and user_id = ${ownerId}::bigint and state = 'ready'`;
+		where ${sql.contains(sql.array(ids, "INT8"), sql`id`)} and user_id = ${sql.cast(ownerId, "bigint")} and state = 'ready'`;
 	return new Map(rows.map((r: any) => [String(r.id), r as MediaRow]));
 }
 
@@ -170,7 +170,7 @@ export type ArticleEntity = Awaited<ReturnType<typeof entity>>;
 
 async function load(id: string): Promise<ArticleRow | undefined> {
 	if (!isId(id)) return undefined;
-	const [row] = await sql`select ${columns} from articles a where a.id = ${id}::bigint`;
+	const [row] = await sql`select ${columns} from articles a where a.id = ${sql.cast(id, "bigint")}`;
 	return row as ArticleRow | undefined;
 }
 
@@ -180,8 +180,8 @@ export async function getArticle(viewerId: string, id: string, withContent = tru
 	if (!row || (row.state !== "Published" && String(row.user_id) !== viewerId)) return undefined;
 	// hidden by staff: only its author and staff see it
 	if (row.hidden && String(row.user_id) !== viewerId && !(await sql`select 1 where ${staffViewer(viewerId)}`).length) return undefined;
-	const [unseen] = await sql`select 1 where ${row.user_id}::bigint in ${protectedFor(viewerId)} or ${row.user_id}::bigint in ${suspendedFor(viewerId)}
-		or ${row.user_id}::bigint in (select blocker_id from blocks where blocked_id = ${viewerId}::bigint)`;
+	const [unseen] = await sql`select 1 where ${sql.cast(row.user_id, "bigint")} in ${protectedFor(viewerId)} or ${sql.cast(row.user_id, "bigint")} in ${suspendedFor(viewerId)}
+		or ${sql.cast(row.user_id, "bigint")} in (select blocker_id from blocks where blocked_id = ${sql.cast(viewerId, "bigint")})`;
 	if (unseen) return undefined;
 	return entity(row, await userById(viewerId, String(row.user_id)), withContent);
 }
@@ -199,21 +199,21 @@ export async function createDraft(viewerId: string, title: unknown, content: unk
 	checkContent(content);
 	const id = newId();
 	await sql`insert into articles (id, user_id, title, content_state, plain_text)
-		values (${id}::bigint, ${viewerId}::bigint, ${checkTitle(title)}, ${content ? JSON.stringify(content) : null}::text::jsonb, ${plainText(content)})`;
+		values (${sql.cast(id, "bigint")}, ${sql.cast(viewerId, "bigint")}, ${checkTitle(title)}, ${sql.cast(content ? JSON.stringify(content) : null, "jsonb")}, ${plainText(content)})`;
 	return result(viewerId, id);
 }
 
 export async function updateTitle(viewerId: string, id: string, title: unknown) {
 	await own(viewerId, id);
-	await sql`update articles set title = ${checkTitle(title)}, modified_at = now() where id = ${id}::bigint`;
+	await sql`update articles set title = ${checkTitle(title)}, modified_at = now() where id = ${sql.cast(id, "bigint")}`;
 	return result(viewerId, id);
 }
 
 export async function updateContent(viewerId: string, id: string, content: unknown) {
 	await own(viewerId, id);
 	checkContent(content);
-	await sql`update articles set content_state = ${content ? JSON.stringify(content) : null}::text::jsonb, plain_text = ${plainText(content)}, modified_at = now()
-		where id = ${id}::bigint`;
+	await sql`update articles set content_state = ${sql.cast(content ? JSON.stringify(content) : null, "jsonb")}, plain_text = ${plainText(content)}, modified_at = now()
+		where id = ${sql.cast(id, "bigint")}`;
 	return result(viewerId, id);
 }
 
@@ -224,7 +224,7 @@ export async function updateCover(viewerId: string, id: string, mediaId: unknown
 		if (!isId(String(mediaId)) || !(await mediaRows(viewerId, [String(mediaId)])).size) throw new ArticleError("Unknown cover image.");
 		cover = String(mediaId);
 	}
-	await sql`update articles set cover_media_id = ${cover}::bigint, modified_at = now() where id = ${id}::bigint`;
+	await sql`update articles set cover_media_id = ${sql.cast(cover, "bigint")}, modified_at = now() where id = ${sql.cast(id, "bigint")}`;
 	return result(viewerId, id);
 }
 
@@ -242,7 +242,7 @@ export async function publish(viewerId: string, id: string, tweetText: unknown, 
 	}
 	if (row.state !== "Published") {
 		await createPost(typeof tweetText === "string" ? tweetText : "", id);
-		await sql`update articles set state = 'Published', first_published_at = coalesce(first_published_at, now()) where id = ${id}::bigint`;
+		await sql`update articles set state = 'Published', first_published_at = coalesce(first_published_at, now()) where id = ${sql.cast(id, "bigint")}`;
 	}
 	return result(viewerId, id);
 }
@@ -250,23 +250,23 @@ export async function publish(viewerId: string, id: string, tweetText: unknown, 
 // back to a draft; the post that carried it goes away
 export async function unpublish(viewerId: string, id: string) {
 	await own(viewerId, id);
-	await sql`delete from posts where article_id = ${id}::bigint`;
-	await sql`update articles set state = 'Draft', modified_at = now() where id = ${id}::bigint`;
+	await sql`delete from posts where article_id = ${sql.cast(id, "bigint")}`;
+	await sql`update articles set state = 'Draft', modified_at = now() where id = ${sql.cast(id, "bigint")}`;
 	return result(viewerId, id);
 }
 
 export async function deleteArticle(viewerId: string, id: string) {
 	await own(viewerId, id);
-	await sql`delete from posts where article_id = ${id}::bigint`;
-	await sql`delete from articles where id = ${id}::bigint`;
+	await sql`delete from posts where article_id = ${sql.cast(id, "bigint")}`;
+	await sql`delete from articles where id = ${sql.cast(id, "bigint")}`;
 }
 
 // the editor's lists of drafts and published articles, newest change first
 export async function slice(viewerId: string, userId: string, lifecycle: string, cursor: unknown, count = 20) {
 	if (userId !== viewerId && lifecycle !== "Published") return { items: [], next: undefined };
 	const before = typeof cursor === "string" && isId(cursor) ? cursor : undefined;
-	const rows = await sql`select ${columns} from articles a where a.user_id = ${userId}::bigint and a.state = ${lifecycle === "Published" ? "Published" : "Draft"}
-		and (not a.hidden or a.user_id = ${viewerId}::bigint or ${staffViewer(viewerId)}) ${before ? sql`and a.id < ${before}::bigint` : sql``} order by a.id desc limit ${count}`;
+	const rows = await sql`select ${columns} from articles a where a.user_id = ${sql.cast(userId, "bigint")} and a.state = ${lifecycle === "Published" ? "Published" : "Draft"}
+		and (not a.hidden or a.user_id = ${sql.cast(viewerId, "bigint")} or ${staffViewer(viewerId)}) ${before ? sql`and a.id < ${sql.cast(before, "bigint")}` : sql``} order by a.id desc limit ${count}`;
 	const author = await userById(viewerId, userId);
 	// in full: the editor opens an article from this list without fetching it again
 	const items = await Promise.all(rows.map((r: any) => entity(r as ArticleRow, author, true)));
@@ -277,7 +277,7 @@ export async function slice(viewerId: string, userId: string, lifecycle: string,
 export async function articlesByIds(viewerId: string, ids: string[]): Promise<Map<string, ArticleEntity>> {
 	const out = new Map<string, ArticleEntity>();
 	if (!ids.length) return out;
-	const rows = await sql`select ${columns} from articles a where a.id = any(${sql.array(ids, "INT8")}) and a.state = 'Published' and (not a.hidden or a.user_id = ${viewerId}::bigint or ${staffViewer(viewerId)})`;
+	const rows = await sql`select ${columns} from articles a where ${sql.contains(sql.array(ids, "INT8"), sql`a.id`)} and a.state = 'Published' and (not a.hidden or a.user_id = ${sql.cast(viewerId, "bigint")} or ${staffViewer(viewerId)})`;
 	for (const r of rows) out.set(String(r.id), await entity(r as ArticleRow, undefined, true));
 	return out;
 }

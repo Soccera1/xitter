@@ -96,27 +96,27 @@ async function profileRoute(path: string, viewer: Viewer, req: Request): Promise
 			if (hasBlockedPhrase(value)) return profileError("Your profile contains a phrase this instance doesn't allow.");
 			changes[column] = value;
 		}
-		if (Object.keys(changes).length) await sql`update users set ${sql(changes)} where id = ${viewer.id}::bigint`;
+		if (Object.keys(changes).length) await sql`update users set ${sql(changes)} where id = ${sql.cast(viewer.id, "bigint")}`;
 		return changedUser(viewer);
 	}
 	if (m[1] === "update_flag") {
 		const flag = f.flag || null;
 		if (flag !== null && !isFlag(flag)) return profileError("Unknown flag.");
-		await sql`update users set flag = ${flag} where id = ${viewer.id}::bigint`;
+		await sql`update users set flag = ${flag} where id = ${sql.cast(viewer.id, "bigint")}`;
 		return changedUser(viewer);
 	}
 	if (m[1] === "remove_profile_banner") {
-		await sql`update users set banner_url = null where id = ${viewer.id}::bigint`;
+		await sql`update users set banner_url = null where id = ${sql.cast(viewer.id, "bigint")}`;
 		return changedUser(viewer);
 	}
 	// the image was uploaded first; only the viewer's own photo upload is accepted
 	const mediaId = f.media_id;
 	if (!isId(mediaId)) return profileError("Upload the image first and send its media_id.");
-	const [media] = await sql`select id from media where id = ${mediaId}::bigint and user_id = ${viewer.id}::bigint`;
+	const [media] = await sql`select id from media where id = ${sql.cast(mediaId, "bigint")} and user_id = ${sql.cast(viewer.id, "bigint")}`;
 	if (!media) return profileError("Unknown upload.");
-	if (m[1] === "update_profile_image") await sql`update users set avatar_url = ${`/media/${mediaId}`} where id = ${viewer.id}::bigint`;
+	if (m[1] === "update_profile_image") await sql`update users set avatar_url = ${`/media/${mediaId}`} where id = ${sql.cast(viewer.id, "bigint")}`;
 	// the client appends a size like /1500x500 to banner addresses
-	else await sql`update users set banner_url = ${`/media/banner/${mediaId}`} where id = ${viewer.id}::bigint`;
+	else await sql`update users set banner_url = ${`/media/banner/${mediaId}`} where id = ${sql.cast(viewer.id, "bigint")}`;
 	return changedUser(viewer);
 }
 
@@ -166,10 +166,10 @@ export async function restRoute(method: string, path: string, viewer: Viewer, re
 		const alt = typeof body?.alt_text?.text === "string" ? body.alt_text.text.slice(0, 1000) : undefined;
 		if (alt && forbiddenText(alt)) return Response.json({ errors: [{ code: 186, message: "The description contains a word this instance doesn't allow." }] }, { status: 400 });
 		if (/^\d{1,19}$/.test(String(body?.media_id)) && alt !== undefined)
-			await sql`update media set alt_text = ${alt || null} where id = ${String(body.media_id)}::bigint and user_id = ${viewer.id}::bigint`;
+			await sql`update media set alt_text = ${alt || null} where id = ${sql.cast(String(body.media_id), "bigint")} and user_id = ${sql.cast(viewer.id, "bigint")}`;
 		const warnings = Array.isArray(body?.sensitive_media_warning) ? body.sensitive_media_warning.filter((w: unknown) => ["adult_content", "graphic_violence", "other"].includes(String(w))) : undefined;
 		if (/^\d{1,19}$/.test(String(body?.media_id)) && warnings !== undefined)
-			await sql`update media set sensitive_warning = ${warnings.length ? sql.array(warnings, "TEXT") : null} where id = ${String(body.media_id)}::bigint and user_id = ${viewer.id}::bigint`;
+			await sql`update media set sensitive_warning = ${warnings.length ? sql.array(warnings, "TEXT") : null} where id = ${sql.cast(String(body.media_id), "bigint")} and user_id = ${sql.cast(viewer.id, "bigint")}`;
 		return Response.json({});
 	}
 	const own = (await accountSettingsRoute(method, path, viewer, req)) ?? (await revokeSessionsRoute(method, path, viewer, req));
@@ -277,7 +277,7 @@ export async function restRoute(method: string, path: string, viewer: Viewer, re
 		return Response.json({ ids, next_cursor: 0, next_cursor_str: "0", previous_cursor: 0, previous_cursor_str: "0" });
 	}
 	if (method === "GET" && /^\/1\.1\/friendships\/outgoing(?:\.json)?$/.test(path)) {
-		const rows = await sql`select target_id::text as id from follow_requests where requester_id = ${viewer.id}::bigint`;
+		const rows = await sql`select ${sql.cast(sql`target_id`, "text")} as id from follow_requests where requester_id = ${sql.cast(viewer.id, "bigint")}`;
 		return Response.json({ ids: rows.map((r: any) => r.id), next_cursor: 0, next_cursor_str: "0", previous_cursor: 0, previous_cursor_str: "0" });
 	}
 	const answer = /^\/1\.1\/friendships\/(accept|deny|cancel)(?:\.json)?$/.exec(path);
@@ -304,10 +304,10 @@ export async function restRoute(method: string, path: string, viewer: Viewer, re
 		// whether people who uploaded this account's email may find it
 		const findable = form?.get("discoverable_by_email");
 		if (findable === "true" || findable === "false")
-			await sql`update users set preferences = preferences || ${JSON.stringify({ discoverable_by_email: findable })}::text::jsonb where id = ${viewer.id}::bigint`;
+			await sql`update users set preferences = ${sql.jsonMerge(sql`preferences`, sql.cast(JSON.stringify({ discoverable_by_email: findable }), "jsonb"))} where id = ${sql.cast(viewer.id, "bigint")}`;
 		const lang = form?.get("lang") ?? form?.get("language");
-		if (typeof lang === "string" && /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(lang)) await sql`update users set language = ${lang} where id = ${viewer.id}::bigint`;
-		const [fresh] = await sql`select screen_name, language, protected, preferences->>'discoverable_by_email' = 'true' as discoverable_by_email from users where id = ${viewer.id}::bigint`;
+		if (typeof lang === "string" && /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(lang)) await sql`update users set language = ${lang} where id = ${sql.cast(viewer.id, "bigint")}`;
+		const [fresh] = await sql`select screen_name, language, protected, ${sql.jsonGet(sql`preferences`, sql`'discoverable_by_email'`, true)} = 'true' as discoverable_by_email from users where id = ${sql.cast(viewer.id, "bigint")}`;
 		return Response.json(settingsFor({ ...viewer, ...fresh }) ?? {});
 	}
 	// Report post / Report account

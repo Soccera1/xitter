@@ -20,19 +20,21 @@ async function visible(v: Viewer, postId: string, write = false) {
 }
 
 async function membership(v: Viewer) {
-	const [user] = await sql`select notes_writer from users where id = ${v.id}::bigint`;
+	const [user] = await sql`select notes_writer from users where id = ${sql.cast(v.id, "bigint")}`;
 	return (!!user?.notes_writer || feature("notes_everyone")) && v.status === "active";
 }
 
 async function profile(v: Viewer, alias?: string) {
-	const [user] = await sql`select id::text, notes_alias, notes_writer from users where ${alias === undefined ? sql`id = ${v.id}::bigint` : sql`notes_alias = ${alias}`}`;
+	const [user] = await sql`select ${sql.cast(sql`id`, "text")} as id, notes_alias, notes_writer from users where ${alias === undefined ? sql`id = ${sql.cast(v.id, "bigint")}` : sql`notes_alias = ${alias}`}`;
 	if (!user || await isBlockedEitherWay(v.id, user.id)) return null;
-	const [counts] = await sql`select count(*) filter(where ratings < 3 or (helpful * 3 < ratings * 2 and not_helpful * 3 < ratings * 2))::int as awaiting_more_ratings,
-		count(*) filter(where ratings >= 3 and helpful * 3 >= ratings * 2)::int as currently_rated_helpful,
-		count(*) filter(where ratings >= 3 and not_helpful * 3 >= ratings * 2)::int as currently_rated_not_helpful from (
+	const [counts] = await sql`select ${sql.cast(sql`count(*) filter(where ratings < 3 or(helpful * 3 < ratings * 2 and not_helpful * 3 < ratings * 2))`, "int")} as awaiting_more_ratings,
+		${sql.cast(sql`
+		count(*) filter(where ratings >= 3 and helpful * 3 >= ratings * 2)`, "int")} as currently_rated_helpful,
+		${sql.cast(sql`
+		count(*) filter(where ratings >= 3 and not_helpful * 3 >= ratings * 2)`, "int")} as currently_rated_not_helpful from (
 		select n.id, count(voter.id) as ratings, count(voter.id) filter(where r.rating = 'Helpful') as helpful, count(voter.id) filter(where r.rating = 'NotHelpful') as not_helpful
 		from community_notes n left join community_note_ratings r on r.note_id = n.id left join users voter on voter.id = r.user_id and voter.status = 'active'
-		where n.author_id = ${user.id}::bigint group by n.id) scores`;
+		where n.author_id = ${sql.cast(user.id, "bigint")} group by n.id) scores`;
 	return { alias: user.notes_alias, can_write_notes: (!!user.notes_writer || feature("notes_everyone")) && v.status === "active", user_enrollment: { enrollment_state: user.notes_writer || feature("notes_everyone") ? "EarnedIn" : "NewUser", writing_impact: 0, rating_impact: 0 },
 		notes_count: { ...counts, last_updated_at: Date.now() }, ratings_count: { last_updated_at: Date.now(), successful: {}, unsuccessful: {} },
 		notification_settings: { needs_your_help_frequency: "Never" }, user_settings: { show_in_app_navigation: true }, is_top_writer: false, is_api_contributor: false,
@@ -46,14 +48,16 @@ export async function notesFor(v: Viewer, postId: string) {
 
 async function notesMany(v: Viewer, postIds: string[], noteIds?: string[]) {
 	if (!postIds.length) return new Map<string, any[]>();
-	const rows = await sql`select n.id::text, n.post_id::text, n.author_id::text, n.text, n.classification, n.created_at, n.data_v1, u.notes_alias as alias,
-		count(r.user_id)::int as ratings, count(r.user_id) filter(where r.rating = 'Helpful')::int as helpful,
-		count(r.user_id) filter(where r.rating = 'NotHelpful')::int as not_helpful,
-		max(r.rating) filter(where r.user_id = ${v.id}::bigint) as viewer_rating,
-		(jsonb_agg(r.data_v2) filter(where r.user_id = ${v.id}::bigint))->0 as viewer_data
+	const rows = await sql`select ${sql.cast(sql`n.id`, "text")} as id, ${sql.cast(sql`n.post_id`, "text")} as post_id, ${sql.cast(sql`n.author_id`, "text")} as author_id, n.text, n.classification, n.created_at, n.data_v1, u.notes_alias as alias,
+		${sql.cast(sql`
+		count(r.user_id)`, "int")} as ratings, ${sql.cast(sql`count(r.user_id) filter(where r.rating = 'Helpful')`, "int")} as helpful,
+		${sql.cast(sql`
+		count(r.user_id) filter(where r.rating = 'NotHelpful')`, "int")} as not_helpful,
+		max(r.rating) filter(where r.user_id = ${sql.cast(v.id, "bigint")}) as viewer_rating,
+		${sql.jsonGet(sql.jsonAgg(sql`r.data_v2`, undefined, true, sql`r.user_id = ${sql.cast(v.id, "bigint")}`), sql`0`)} as viewer_data
 		from community_notes n left join (select x.* from community_note_ratings x join users voter on voter.id = x.user_id and voter.status = 'active') r on r.note_id = n.id
 		join users u on u.id = n.author_id and u.status <> 'suspended'
-		where n.post_id = any(${sql.array(postIds, "INT8")}) and ${noteIds ? sql`n.id = any(${sql.array(noteIds, "INT8")})` : sql`true`} and n.author_id not in ${blockedFor(v.id)} group by n.id, u.notes_alias order by n.id desc`;
+		where ${sql.contains(sql.array(postIds, "INT8"), sql`n.post_id`)} and ${noteIds ? sql.contains(sql.array(noteIds, "INT8"), sql`n.id`) : sql`true`} and n.author_id not in ${blockedFor(v.id)} group by n.id, u.notes_alias order by n.id desc`;
 	const result = new Map<string, any[]>();
 	for (const n of rows) {
 		const list = result.get(n.post_id) ?? [];
@@ -77,7 +81,7 @@ const entity = (n: any, post?: any) => ({
 });
 
 async function target(v: Viewer, noteId: string, write = false) {
-	const [note] = await sql`select n.id::text, n.post_id::text, n.author_id::text from community_notes n join users u on u.id = n.author_id and u.status <> 'suspended' where n.id = ${id(noteId)}::bigint`;
+	const [note] = await sql`select ${sql.cast(sql`n.id`, "text")} as id, ${sql.cast(sql`n.post_id`, "text")} as post_id, ${sql.cast(sql`n.author_id`, "text")} as author_id from community_notes n join users u on u.id = n.author_id and u.status <> 'suspended' where n.id = ${sql.cast(id(noteId), "bigint")}`;
 	if (!note) throw new PostError("No such note.", 144);
 	if (await isBlockedEitherWay(v.id, note.author_id)) throw new PostError("This note isn't available.", 144);
 	await visible(v, note.post_id, write);
@@ -86,7 +90,7 @@ async function target(v: Viewer, noteId: string, write = false) {
 
 export const noteHandlers = {
 	BirdwatchFetchGlobalTimeline: async (v: Viewer) => {
-		const rows = await sql`select p.id::text from posts p where (exists(select 1 from community_notes n where n.post_id = p.id) or exists(select 1 from community_note_requests r where r.post_id = p.id))
+		const rows = await sql`select ${sql.cast(sql`p.id`, "text")} as id from posts p where (exists(select 1 from community_notes n where n.post_id = p.id) or exists(select 1 from community_note_requests r where r.post_id = p.id))
 			and p.user_id not in ${blockedFor(v.id)} and p.user_id not in ${outOfView(v.id)} order by p.id desc limit 50`;
 		const posts = await postsByIds(v.id, rows.map((r: any) => r.id));
 		const entries = rows.flatMap((r: any) => posts.get(r.id) ? [tweetEntry(posts.get(r.id)!, r.id)] : []);
@@ -98,16 +102,16 @@ export const noteHandlers = {
 	},
 	BirdwatchFetchBatSignal: async (v: Viewer, vars: any) => {
 		await visible(v, vars.tweet_id);
-		const [r] = await sql`select min(created_at) as created_at from community_note_requests where post_id = ${vars.tweet_id}::bigint`;
+		const [r] = await sql`select min(created_at) as created_at from community_note_requests where post_id = ${sql.cast(vars.tweet_id, "bigint")}`;
 		return { data: { birdwatch_bat_signal_by_rest_id: { created_at: r.created_at ? new Date(r.created_at).getTime() : null, has_live_note: false } } };
 	},
 	XitterPostContext: async (v: Viewer, vars: any) => {
 		const ids = [...new Set((Array.isArray(vars.ids) ? vars.ids : []).filter(isId))].slice(0, 20) as string[];
 		if (!ids.length) return { data: { xitter_post_context: [] } };
-		const posts = await sql`select id::text, source from posts where id = any(${sql.array(ids, "INT8")}) and (not hidden or ${staffViewer(v.id)}) and user_id not in ${blockedFor(v.id)} and user_id not in ${outOfView(v.id)} and user_id not in ${protectedFor(v.id)}`;
+		const posts = await sql`select ${sql.cast(sql`id`, "text")} as id, source from posts where ${sql.contains(sql.array(ids, "INT8"), sql`id`)} and (not hidden or ${staffViewer(v.id)}) and user_id not in ${blockedFor(v.id)} and user_id not in ${outOfView(v.id)} and user_id not in ${protectedFor(v.id)}`;
 		const visibleIds = posts.map((p: any) => p.id);
 		const notes = await notesMany(v, visibleIds);
-		const requests = visibleIds.length ? await sql`select post_id::text, count(*)::int as count, bool_or(user_id = ${v.id}::bigint) as own from community_note_requests where post_id = any(${sql.array(visibleIds, "INT8")}) group by post_id` : [];
+		const requests = visibleIds.length ? await sql`select ${sql.cast(sql`post_id`, "text")} as post_id, ${sql.cast(sql`count(*)`, "int")} as count, ${sql.boolOr(sql`user_id = ${sql.cast(v.id, "bigint")}`)} as own from community_note_requests where ${sql.contains(sql.array(visibleIds, "INT8"), sql`post_id`)} group by post_id` : [];
 		const byPost = new Map(requests.map((r: any) => [r.post_id, r]));
 		const canWrite = await membership(v);
 		return { data: { xitter_post_context: posts.map((p: any) => ({ ...p, can_write_notes: canWrite, notes: (notes.get(p.id) ?? []).map(({ author_id, ...n }: any) => n), requests: byPost.get(p.id)?.count ?? 0, requested: !!byPost.get(p.id)?.own })) } };
@@ -124,8 +128,8 @@ export const noteHandlers = {
 		const tags = (key: string) => Array.isArray(data[key]) ? data[key].filter((x: unknown) => typeof x === "string" && x.length < 60).slice(0, 20) : [];
 		const details = { trustworthy_sources: data.trustworthy_sources === true, misleading_tags: tags("misleading_tags"), not_misleading_tags: tags("not_misleading_tags") };
 		const rows = await sql`insert into community_notes(id, post_id, author_id, text, classification, data_v1)
-			values(${newId()}::bigint, ${vars.tweet_id}::bigint, ${v.id}::bigint, ${text}, ${classification}, ${JSON.stringify(details)}::text::jsonb)
-			on conflict(post_id, author_id) do nothing returning id::text`;
+			values(${sql.cast(newId(), "bigint")}, ${sql.cast(vars.tweet_id, "bigint")}, ${sql.cast(v.id, "bigint")}, ${text}, ${classification}, ${sql.cast(JSON.stringify(details), "jsonb")})
+			on conflict(post_id, author_id) do nothing returning ${sql.cast(sql`id`, "text")} as id`;
 		if (!rows.length) throw new PostError("You already wrote a note on this post.", 187);
 		const note = (await notesFor(v, vars.tweet_id)).find((n: any) => n.id === rows[0].id);
 		return { data: { birdwatchnote_create_v2: { type: "BirdwatchNote", note: entity(note), rest_id: rows[0].id } } };
@@ -137,20 +141,20 @@ export const noteHandlers = {
 		if (!["Helpful", "SomewhatHelpful", "NotHelpful"].includes(rating)) throw new PostError("Invalid rating.", 144);
 		const tags = (key: string) => Array.isArray(vars.data_v2[key]) ? vars.data_v2[key].filter((x: unknown) => typeof x === "string" && x.length < 60).slice(0, 20) : [];
 		const data = { helpfulness_level: rating, helpful_tags: tags("helpful_tags"), not_helpful_tags: tags("not_helpful_tags") };
-		await sql`insert into community_note_ratings(note_id, user_id, rating, data_v2) values(${note.id}::bigint, ${v.id}::bigint, ${rating}, ${JSON.stringify(data)}::text::jsonb)
+		await sql`insert into community_note_ratings(note_id, user_id, rating, data_v2) values(${sql.cast(note.id, "bigint")}, ${sql.cast(v.id, "bigint")}, ${rating}, ${sql.cast(JSON.stringify(data), "jsonb")})
 			on conflict(note_id, user_id) do update set rating = excluded.rating, data_v2 = excluded.data_v2`;
 		return { data: { birdwatchnote_rate_v3: { __typename: "BirdwatchNoteRating", data_v2: data } } };
 	},
 	BirdwatchDeleteRating: async (v: Viewer, vars: any) => {
 		const note = await target(v, vars.note_id, true);
-		await sql`delete from community_note_ratings where note_id = ${note.id}::bigint and user_id = ${v.id}::bigint`;
+		await sql`delete from community_note_ratings where note_id = ${sql.cast(note.id, "bigint")} and user_id = ${sql.cast(v.id, "bigint")}`;
 		return { data: { birdwatchnote_rating_delete: "Done" } };
 	},
 	BirdwatchDeleteNote: async (v: Viewer, vars: any) => {
 		const note = await target(v, vars.note_id, true);
 		if (note.author_id !== v.id && !["admin", "moderator"].includes(v.role ?? "")) throw new PostError("You can't delete this note.", 144);
-		if (note.author_id !== v.id) await sql`insert into audit_log(id, actor_id, action, target, detail) values(${newId()}::bigint, ${v.id}::bigint, 'delete_community_note', ${note.id}, ${JSON.stringify({ post_id: note.post_id })}::text::jsonb)`;
-		await sql`delete from community_notes where id = ${note.id}::bigint`;
+		if (note.author_id !== v.id) await sql`insert into audit_log(id, actor_id, action, target, detail) values(${sql.cast(newId(), "bigint")}, ${sql.cast(v.id, "bigint")}, 'delete_community_note', ${note.id}, ${sql.cast(JSON.stringify({ post_id: note.post_id }), "jsonb")})`;
+		await sql`delete from community_notes where id = ${sql.cast(note.id, "bigint")}`;
 		return { data: { birdwatchnote_delete: true } };
 	},
 	BirdwatchCreateBatSignal: async (v: Viewer, vars: any) => {
@@ -159,13 +163,13 @@ export const noteHandlers = {
 		const source = typeof vars.source_link === "string" ? vars.source_link.trim() : "";
 		if ([...suggestion].length > 500 || source.length > 2048 || (source && !/^https?:\/\/[^\s<>]+$/.test(source))) throw new PostError("Invalid request source or explanation.", 144);
 		await refuseHate(v.id, suggestion, "note");
-		const [r] = await sql`insert into community_note_requests(post_id, user_id, source_link, suggestion) values(${vars.tweet_id}::bigint, ${v.id}::bigint, ${source || null}, ${suggestion || null})
+		const [r] = await sql`insert into community_note_requests(post_id, user_id, source_link, suggestion) values(${sql.cast(vars.tweet_id, "bigint")}, ${sql.cast(v.id, "bigint")}, ${source || null}, ${suggestion || null})
 			on conflict(post_id,user_id) do update set source_link = excluded.source_link, suggestion = excluded.suggestion returning created_at`;
 		return { data: { birdwatchbatsignal_create: { type: "BirdwatchBatSignal", created_at: String(new Date(r.created_at).getTime()) } } };
 	},
 	BirdwatchDeleteBatSignal: async (v: Viewer, vars: any) => {
 		await visible(v, vars.tweet_id, true);
-		await sql`delete from community_note_requests where post_id = ${vars.tweet_id}::bigint and user_id = ${v.id}::bigint`;
+		await sql`delete from community_note_requests where post_id = ${sql.cast(vars.tweet_id, "bigint")} and user_id = ${sql.cast(v.id, "bigint")}`;
 		return { data: { birdwatchbatsignal_delete: true } };
 	},
 	BirdwatchFetchNotes: async (v: Viewer, vars: any) => {
@@ -185,8 +189,8 @@ export const noteHandlers = {
 	BirdwatchFetchContributorNotesSlice: async (v: Viewer, vars: any) => {
 		const alias = typeof vars.alias === "string" ? vars.alias.slice(0, 80) : "";
 		const before = isId(vars.cursor) ? vars.cursor : "9223372036854775807";
-		const rows = await sql`select n.id::text, n.post_id::text from community_notes n join users u on u.id = n.author_id join posts p on p.id = n.post_id
-			where u.notes_alias = ${alias} and n.id < ${before}::bigint and n.author_id not in ${blockedFor(v.id)} and p.user_id not in ${blockedFor(v.id)} and p.user_id not in ${outOfView(v.id)} order by n.id desc limit 11`;
+		const rows = await sql`select ${sql.cast(sql`n.id`, "text")} as id, ${sql.cast(sql`n.post_id`, "text")} as post_id from community_notes n join users u on u.id = n.author_id join posts p on p.id = n.post_id
+			where u.notes_alias = ${alias} and n.id < ${sql.cast(before, "bigint")} and n.author_id not in ${blockedFor(v.id)} and p.user_id not in ${blockedFor(v.id)} and p.user_id not in ${outOfView(v.id)} order by n.id desc limit 11`;
 		const page = rows.slice(0, 10), ids = page.map((r: any) => r.post_id);
 		const values = await notesMany(v, ids, page.map((r: any) => r.id)), posts = await postsByIds(v.id, ids);
 		const notes = page.flatMap((r: any) => { const note = values.get(r.post_id)?.find((n: any) => n.id === r.id), post = posts.get(r.post_id); return note && post ? [entity(note, post)] : []; });

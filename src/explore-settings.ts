@@ -3,14 +3,14 @@
 // edge's country header, see countries.ts). Kept in users.preferences.explore.
 
 import { allCountries, countryName, isCountry } from "./countries";
-import { sql, databaseBackend } from "./db";
+import { sql } from "./db";
 
 export const WORLDWIDE = "1";
 
 type Stored = { place?: string; use_current_location?: boolean; use_personalized_trends?: boolean };
 
 async function stored(userId: string): Promise<Stored & { country: string | null }> {
-	const [u] = await sql`select preferences->'explore' as explore, country from users where id = ${userId}::bigint`;
+	const [u] = await sql`select ${sql.jsonGet(sql`preferences`, sql`'explore'`)} as explore, country from users where id = ${sql.cast(userId, "bigint")}`;
 	return { ...(u?.explore ?? {}), country: u?.country ?? null };
 }
 
@@ -35,10 +35,8 @@ export async function setExploreSettings(userId: string, body: Record<string, un
 	if (place !== undefined && (place === WORLDWIDE || isCountry(place))) next.place = place;
 	for (const k of ["use_current_location", "use_personalized_trends"] as const)
 		if (body[k] !== undefined) next[k] = body[k] === true || body[k] === "true";
-	await sql`update users set preferences = ${databaseBackend === "sqlite"
-		? sql`json_set(preferences, '$.explore', json_patch(coalesce(preferences->'explore', '{}'), ${JSON.stringify(next)}))`
-		: sql`jsonb_set(preferences, '{explore}', coalesce(preferences->'explore', '{}') || ${JSON.stringify(next)}::text::jsonb)`}
-		where id = ${userId}::bigint`;
+	await sql`update users set preferences = ${sql.jsonSet(sql`preferences`, '{explore}', sql.jsonMerge(sql`coalesce(${sql.jsonGet(sql`preferences`, 'explore')}, '{}')`, sql.cast(JSON.stringify(next), 'jsonb')))}
+		where id = ${sql.cast(userId, "bigint")}`;
 	return exploreSettings(userId);
 }
 

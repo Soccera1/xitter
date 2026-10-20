@@ -1,7 +1,7 @@
 // Polls are cards: the composer creates the card first (caps /v2/cards/create),
 // then posts with card_uri. Voting goes through the card passthrough endpoint.
 
-import { sql, databaseBackend } from "./db";
+import { sql } from "./db";
 import { isId, newId } from "./ids";
 import { mediaUrl } from "./media";
 import { forbiddenText } from "./names";
@@ -73,25 +73,18 @@ export function pollCard(p: PollRow) {
 
 export async function pollsByIds(viewerId: string, ids: string[]): Promise<Map<string, PollRow>> {
 	if (!ids.length) return new Map();
-	const rows = databaseBackend === "sqlite" ? await sql`select p.id::text, p.choices, p.duration_minutes, p.ends_at,
-		case when p.choice_media is null then null else (select json_group_array(case when m.id is null then null else json_object('id', cast(m.id as text), 'mime', m.mime, 'width', m.width, 'height', m.height) end order by c.key)
-			from json_each(p.choice_media) c left join media m on m.id = cast(c.value as integer)) end as images,
-		(select json_group_array((select count(*) from poll_votes v where v.poll_id = p.id and v.choice = c.key + 1) order by c.key) from json_each(p.choices) c) as counts,
-		(select v.choice from poll_votes v where v.poll_id = p.id and v.user_id = ${viewerId}::bigint) as voted
-		from polls p where p.id = any(${sql.array(ids, "INT8")})` : await sql`select p.id::text, p.choices, p.duration_minutes, p.ends_at,
-			case when p.choice_media is null then null else (select json_agg(case when m.id is null then null else json_build_object('id', m.id::text, 'mime', m.mime, 'width', m.width, 'height', m.height) end order by c.n)
-				from unnest(p.choice_media) with ordinality as c(media_id, n) left join media m on m.id = c.media_id) end as images,
-			coalesce((select array_agg(c.n order by c.choice) from (
-				select g.choice, count(v.user_id)::int as n from generate_series(1, array_length(p.choices, 1)) as g(choice)
-				left join poll_votes v on v.poll_id = p.id and v.choice = g.choice group by g.choice) c), '{}') as counts,
-			(select v.choice from poll_votes v where v.poll_id = p.id and v.user_id = ${viewerId}::bigint) as voted
-		from polls p where p.id = any(${sql.array(ids, "INT8")})`;
+	const rows = await sql`select ${sql.cast(sql`p.id`, "text")} as id, p.choices, p.duration_minutes, p.ends_at,
+		case when p.choice_media is null then null else (select ${sql.jsonAgg(sql`case when m.id is null then null else ${sql.jsonObject('id', sql.cast(sql`m.id`, 'text'), 'mime', sql`m.mime`, 'width', sql`m.width`, 'height', sql`m.height`)} end`, sql`c.key`)}
+			from ${sql.each(sql`p.choice_media`)} c left join media m on m.id = cast(c.value as bigint)) end as images,
+		(select ${sql.arrayAgg(sql`(select count(*) from poll_votes v where v.poll_id = p.id and v.choice = c.key + 1)`, sql`c.key`)} from ${sql.each(sql`p.choices`)} c) as counts,
+		(select v.choice from poll_votes v where v.poll_id = p.id and v.user_id = ${sql.cast(viewerId, "bigint")}) as voted
+		from polls p where ${sql.contains(sql.array(ids, "INT8"), sql`p.id`)}`;
 	return new Map(rows.map((r: any) => [r.id as string, r as PollRow]));
 }
 
 export async function createCard(userId: string, raw: unknown): Promise<{ status: string; card_uri: string }> {
 	if (String(raw ?? "").length > 20_000) throw new PollError("card_data is too large.");
-	const [recent] = await sql`select count(*)::int as n from polls where user_id = ${userId}::bigint and created_at > now() - interval '1 hour'`;
+	const [recent] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from polls where user_id = ${sql.cast(userId, "bigint")} and created_at > now() - ${sql.duration(1, "hour")}`;
 	if (recent.n >= 60) throw new PollError("You've made too many polls. Try again later.", 429);
 	let data: Record<string, unknown>;
 	try {
@@ -120,13 +113,13 @@ export async function createCard(userId: string, raw: unknown): Promise<{ status
 		media = choices.map((_, i) => /^mis:\/\/(\d{1,19})$/.exec(String(data[`twitter:image:choice${i + 1}_image:src:id`] ?? ""))?.[1] ?? null);
 		const given = media.filter((m): m is string => !!m);
 		if (!given.length) throw new PollError("An image poll needs at least one image.");
-		const ok = await sql`select id::text from media where id = any(${sql.array(given, "INT8")}) and user_id = ${userId}::bigint and kind = 'photo' and post_id is null and state = 'ready'`;
+		const ok = await sql`select ${sql.cast(sql`id`, "text")} as id from media where ${sql.contains(sql.array(given, "INT8"), sql`id`)} and user_id = ${sql.cast(userId, "bigint")} and kind = 'photo' and post_id is null and state = 'ready'`;
 		if (ok.length !== new Set(given).size) throw new PollError("Choice images must be photos you just uploaded.");
 	}
 	const id = newId();
-	await sql`insert into polls (id, user_id, choices, duration_minutes) values (${id}::bigint, ${userId}::bigint, ${sql.array(choices, "TEXT")}, ${duration})`;
+	await sql`insert into polls (id, user_id, choices, duration_minutes) values (${sql.cast(id, "bigint")}, ${sql.cast(userId, "bigint")}, ${sql.array(choices, "TEXT")}, ${duration})`;
 	// a choice without a photo keeps 0, which matches no upload
-	if (media) await sql`update polls set choice_media = ${sql.array(media.map((m) => m ?? "0"), "INT8")} where id = ${id}::bigint`;
+	if (media) await sql`update polls set choice_media = ${sql.array(media.map((m) => m ?? "0"), "INT8")} where id = ${sql.cast(id, "bigint")}`;
 	return { status: "OK", card_uri: `card://${id}` };
 }
 
@@ -134,10 +127,10 @@ export async function createCard(userId: string, raw: unknown): Promise<{ status
 export async function attachPoll(userId: string, postId: string, cardUri: string): Promise<void> {
 	const id = /^card:\/\/(\d{1,19})$/.exec(cardUri)?.[1];
 	if (!id) throw new PollError("Unknown card.");
-	const rows = await sql`update polls set ends_at = now() + make_interval(mins => duration_minutes)
-		where id = ${id}::bigint and user_id = ${userId}::bigint and ends_at is null returning id`;
+	const rows = await sql`update polls set ends_at = now() + ${sql.duration(sql`duration_minutes`, "minute")}
+		where id = ${sql.cast(id, "bigint")} and user_id = ${sql.cast(userId, "bigint")} and ends_at is null returning id`;
 	if (!rows.length) throw new PollError("That poll can't be used.");
-	await sql`update posts set poll_id = ${id}::bigint where id = ${postId}::bigint`;
+	await sql`update posts set poll_id = ${sql.cast(id, "bigint")} where id = ${sql.cast(postId, "bigint")}`;
 }
 
 export async function vote(viewerId: string, form: FormData): Promise<Record<string, unknown>> {
@@ -149,7 +142,7 @@ export async function vote(viewerId: string, form: FormData): Promise<Record<str
 	if (!poll || !poll.ends_at) throw new PollError("Unknown card.", 404);
 	if (!Number.isInteger(choice) || choice < 1 || choice > poll.choices.length) throw new PollError("Pick one of the choices.");
 	if (poll.ends_at.getTime() <= Date.now()) throw new PollError("This poll has ended.");
-	await sql`insert into poll_votes (poll_id, user_id, choice) values (${id}::bigint, ${viewerId}::bigint, ${choice}) on conflict do nothing`;
+	await sql`insert into poll_votes (poll_id, user_id, choice) values (${sql.cast(id, "bigint")}, ${sql.cast(viewerId, "bigint")}, ${choice}) on conflict do nothing`;
 	const fresh = (await pollsByIds(viewerId, [id])).get(id)!;
 	return {
 		card: {

@@ -32,7 +32,7 @@ function check(label: string, ok: boolean, detail: unknown = "") {
 const viewer = await session(viewerName);
 const a = await session(aName);
 const b = await session(bName);
-const before = (await sql`select screen_name, country, preferences->'explore' as explore from users where screen_name in (${viewerName}, ${aName}, ${bName})`) as any[];
+const before = (await sql`select screen_name, country, ${sql.jsonGet(sql`preferences`, sql`'explore'`)} as explore from users where screen_name in (${viewerName}, ${aName}, ${bName})`) as any[];
 const was = Object.fromEntries(before.map((r) => [r.screen_name, r]));
 const stamp = Date.now().toString(36);
 const de = `zqde${stamp}`;
@@ -80,7 +80,7 @@ try {
 	for (const [s, id] of made) await s.gql("DeleteTweet", { tweet_id: id });
 	for (const name of [viewerName, aName, bName]) {
 		const r = was[name];
-		await sql`update users set country = ${r.country}, preferences = case when ${r.explore === null} then preferences - 'explore' else jsonb_set(preferences, '{explore}', ${JSON.stringify(r.explore)}::text::jsonb) end where screen_name = ${name}`;
+		await sql`update users set country = ${r.country}, preferences = case when ${r.explore === null} then ${sql.jsonDelete(sql`preferences`, sql`'explore'`)} else ${sql.jsonSet(sql`preferences`, sql`'{explore}'`, sql.cast(JSON.stringify(r.explore), "jsonb"))} end where screen_name = ${name}`;
 	}
 }
 

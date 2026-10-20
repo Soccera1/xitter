@@ -31,12 +31,12 @@ function check(label: string, ok: boolean, detail: unknown = "") {
 const viewer = await session(viewerName);
 const similar = await session(similarName);
 const ids = Object.fromEntries(
-	((await sql`select screen_name, id::text, email from users where screen_name in (${viewerName}, ${profileName}, ${similarName}, ${bridgeName})`) as any[]).map((r) => [r.screen_name, r]),
+	((await sql`select screen_name, ${sql.cast(sql`id`, "text")} as id, email from users where screen_name in (${viewerName}, ${profileName}, ${similarName}, ${bridgeName})`) as any[]).map((r) => [r.screen_name, r]),
 );
 const [viewerId, profileId, similarId, bridgeId] = [viewerName, profileName, similarName, bridgeName].map((n) => ids[n].id);
 const added: [string, string][] = [];
 const follow = async (a: string, b: string) => {
-	const r = await sql`insert into follows (follower_id, followee_id) values (${a}::bigint, ${b}::bigint) on conflict do nothing returning 1`;
+	const r = await sql`insert into follows (follower_id, followee_id) values (${sql.cast(a, "bigint")}, ${sql.cast(b, "bigint")}) on conflict do nothing returning 1`;
 	if (r.length) added.push([a, b]);
 };
 const mail = `contacts-${Date.now()}@example.test`;
@@ -53,7 +53,7 @@ try {
 	check("the profile side bar's 'You might like' does the same", side.data.sidebar_user_recommendations[0]?.user_results.result.rest_id === similarId);
 
 	// contacts
-	await sql`update users set email = ${mail} where id = ${similarId}::bigint`;
+	await sql`update users set email = ${mail} where id = ${sql.cast(similarId, "bigint")}`;
 	check("the address book starts empty", (await (await viewer.rest("/1.1/contacts/addressbook.json?count=100")).json()).contacts.length === 0);
 	const up = await (await viewer.rest("/1.1/contacts/upload_v2.json", { json: { contacts: [{ name: "Friend; One", email_addresses: [mail.toUpperCase()], phone_numbers: ["+1 555 0100"] }, { name: "" }] } })).json();
 	check("uploading keeps the real contacts", up.uploaded === 1, up);
@@ -72,9 +72,9 @@ try {
 	await viewer.rest("/1.1/contacts/destroy/all.json", { form: {} });
 	check("removing contacts empties the address book", (await (await viewer.rest("/1.1/contacts/addressbook.json")).json()).contacts.length === 0);
 } finally {
-	for (const [a, b] of added) await sql`delete from follows where follower_id = ${a}::bigint and followee_id = ${b}::bigint`;
-	await sql`update users set email = ${ids[similarName].email}, preferences = preferences - 'discoverable_by_email' where id = ${similarId}::bigint`;
-	await sql`delete from contacts where user_id = ${viewerId}::bigint`;
+	for (const [a, b] of added) await sql`delete from follows where follower_id = ${sql.cast(a, "bigint")} and followee_id = ${sql.cast(b, "bigint")}`;
+	await sql`update users set email = ${ids[similarName].email}, preferences = ${sql.jsonDelete(sql`preferences`, sql`'discoverable_by_email'`)} where id = ${sql.cast(similarId, "bigint")}`;
+	await sql`delete from contacts where user_id = ${sql.cast(viewerId, "bigint")}`;
 }
 
 console.log(failures ? `${failures} failed` : "all checks passed");

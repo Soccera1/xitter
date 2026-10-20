@@ -36,8 +36,8 @@ const created: string[] = [];
 const names: string[] = [];
 const admin = await session(adminName);
 const { settings: before } = (await admin.admin("settings")).data;
-const [adminRow] = await sql`select id::text, totp_enabled from users where screen_name = ${adminName}`;
-const [orgRow] = await sql`select id::text from users where screen_name = ${orgName}`;
+const [adminRow] = await sql`select ${sql.cast(sql`id`, "text")} as id, totp_enabled from users where screen_name = ${adminName}`;
+const [orgRow] = await sql`select ${sql.cast(sql`id`, "text")} as id from users where screen_name = ${orgName}`;
 let backup: string | undefined;
 
 try {
@@ -46,7 +46,7 @@ try {
 		names.push(name);
 		created.push(await createUser(name, name, password));
 	}
-	await sql`update users set role = 'support' where id = ${created[2]}::bigint`;
+	await sql`update users set role = 'support' where id = ${sql.cast(created[2], "bigint")}`;
 	const [one, two, support] = [await session(names[0]), await session(names[1]), await session(names[2])];
 
 	// error log
@@ -78,9 +78,9 @@ try {
 	check((await admin.admin("saveSecurity", { staff_2fa: false, admin_ips: ["nonsense"] })).status === 400, "bad entries refused");
 	check((await admin.admin("saveSecurity", { staff_2fa: false, admin_ips: [sec.your_ip] })).status === 200, "own address saved");
 	check((await support.admin("stats")).status === 200, "allowed address gets in");
-	await sql`update users set totp_enabled = false where id = ${adminRow.id}::bigint`;
+	await sql`update users set totp_enabled = false where id = ${sql.cast(adminRow.id, "bigint")}`;
 	check((await admin.admin("saveSecurity", { staff_2fa: true, admin_ips: [] })).status === 400, "two-factor rule needs your own two-factor");
-	await sql`update users set totp_enabled = true where id = ${adminRow.id}::bigint`;
+	await sql`update users set totp_enabled = true where id = ${sql.cast(adminRow.id, "bigint")}`;
 	check((await admin.admin("saveSecurity", { staff_2fa: true, admin_ips: [] })).status === 200, "two-factor rule on");
 	const shut = await support.admin("stats");
 	check(shut.status === 403 && /two-factor/.test(shut.data.error), "staff without two-factor shut out");
@@ -120,7 +120,7 @@ try {
 	const made1 = await one.page("/account/invites", {});
 	const code = /Your invite is <b>(\d{4}-\d{4})<\/b>/.exec(made1.text)?.[1];
 	check(code, "member made an invite");
-	const [inv] = await sql`select created_by::text, max_uses, expires_at from invites where code = ${code}`;
+	const [inv] = await sql`select ${sql.cast(sql`created_by`, "text")} as created_by, max_uses, expires_at from invites where code = ${code}`;
 	check(inv.created_by === created[0] && inv.max_uses === 2 && inv.expires_at, "invite belongs to the member, two uses, expires");
 	check((await one.page("/account/invites", {})).text.includes("1 of 1"), "quota spent");
 	check((await admin.admin("saveInviteQuota", { enabled: true, per_month: 5, uses: 1, min_age_days: 30 })).status === 200, "age rule");
@@ -134,25 +134,25 @@ try {
 	check(notes.includes(`@${orgName} asked to add you as an affiliate`) && notes.includes("/account/organisation"), "the request is a notification");
 	check((await one.page("/home")).text.includes("/account/organisation"), "Organisation in the More menu");
 	check((await one.page("/account/organisation", { do: "accept", org: orgRow.id })).text.includes(`affiliate of @${orgName}`), "accepted");
-	check((await sql`select 1 from affiliations where org_id = ${orgRow.id}::bigint and user_id = ${created[0]}::bigint`).length === 1, "affiliation made");
+	check((await sql`select 1 from affiliations where org_id = ${sql.cast(orgRow.id, "bigint")} and user_id = ${sql.cast(created[0], "bigint")}`).length === 1, "affiliation made");
 	check((await one.page("/account/organisation", { do: "add", handle: names[1] })).text.includes("Only an organisation"), "affiliates aren't managers");
 	check((await org.page("/account/organisation", { do: "manager", user: created[0], on: "1" })).text.includes("can now manage"), "made a manager");
 	check((await one.page("/account/organisation", { do: "add", handle: names[1] })).text.includes(`Asked @${names[1]}`), "managers ask too");
 	check((await two.page("/account/organisation", { do: "decline", org: orgRow.id })).text.includes("declined"), "declined");
-	check(!(await sql`select 1 from affiliations where user_id = ${created[1]}::bigint`).length, "declining leaves no affiliation");
+	check(!(await sql`select 1 from affiliations where user_id = ${sql.cast(created[1], "bigint")}`).length, "declining leaves no affiliation");
 	check((await one.page("/account/organisation", { do: "manager", user: created[0], on: "" })).text.includes("Only the organisation"), "managers don't pick managers");
 	check((await org.page("/account/organisation", { do: "add", handle: orgName })).text.includes("its own affiliate"), "not itself");
 	check((await org.page("/account/organisation", { do: "remove", user: created[0] })).text.includes("Removed"), "organisation removes");
-	check(!(await sql`select 1 from affiliations where user_id = ${created[0]}::bigint`).length, "affiliation gone");
+	check(!(await sql`select 1 from affiliations where user_id = ${sql.cast(created[0], "bigint")}`).length, "affiliation gone");
 
 	console.log(`all ${checks} admin checks passed`);
 } finally {
 	await admin.admin("saveInviteQuota", before.invite_quota);
 	await admin.admin("saveSecurity", { staff_2fa: false, admin_ips: [] });
-	await sql`update users set totp_enabled = ${adminRow.totp_enabled} where id = ${adminRow.id}::bigint`;
+	await sql`update users set totp_enabled = ${adminRow.totp_enabled} where id = ${sql.cast(adminRow.id, "bigint")}`;
 	if (backup) await admin.admin("deleteBackup", { name: backup });
-	await sql`delete from error_log where message like ${`%${names[0]}%`}`;
-	await sql`delete from invites where created_by = any(${sql.array(created, "INT8")})`;
-	for (const id of created) await sql`delete from users where id = ${id}::bigint`;
+	await sql`delete from error_log where ${sql.like(sql`message`, `%${names[0]}%`, false)}`;
+	await sql`delete from invites where ${sql.contains(sql.array(created, "INT8"), sql`created_by`)}`;
+	for (const id of created) await sql`delete from users where id = ${sql.cast(id, "bigint")}`;
 	await sql.close();
 }

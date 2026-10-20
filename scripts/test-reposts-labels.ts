@@ -24,9 +24,9 @@ async function session(username: string) {
 
 const author = await session(authorName);
 const other = await session(otherName);
-const otherId = (await sql`select id::text from users where screen_name = ${otherName}`)[0].id as string;
+const otherId = (await sql`select ${sql.cast(sql`id`, "text")} as id from users where screen_name = ${otherName}`)[0].id as string;
 const made: string[] = [];
-const [savedLabel] = await sql`select parody_label, parody_label_at from users where id = ${otherId}::bigint`;
+const [savedLabel] = await sql`select parody_label, parody_label_at from users where id = ${sql.cast(otherId, "bigint")}`;
 
 try {
 	// ---- a repost's own id
@@ -40,11 +40,11 @@ try {
 		r = await author.gql(op, { tweet_id: repostId });
 		check(r.data?.[done] === "Done", `${op} by the repost's id works`, r);
 	}
-	const [marks] = await sql`select (select count(*)::int from likes where post_id = ${postId}::bigint) as likes, (select count(*)::int from bookmarks where post_id = ${postId}::bigint) as bookmarks`;
+	const [marks] = await sql`select (select ${sql.cast(sql`count(*)`, "int")} from likes where post_id = ${sql.cast(postId, "bigint")}) as likes, (select ${sql.cast(sql`count(*)`, "int")} from bookmarks where post_id = ${sql.cast(postId, "bigint")}) as bookmarks`;
 	check(marks.likes === 1 && marks.bookmarks === 1, "and lands on the original post", marks);
 	r = await author.gql("UnfavoriteTweet", { tweet_id: repostId });
 	r = await author.gql("DeleteBookmark", { tweet_id: repostId });
-	const [after] = await sql`select (select count(*)::int from likes where post_id = ${postId}::bigint) as likes, (select count(*)::int from bookmarks where post_id = ${postId}::bigint) as bookmarks`;
+	const [after] = await sql`select (select ${sql.cast(sql`count(*)`, "int")} from likes where post_id = ${sql.cast(postId, "bigint")}) as likes, (select ${sql.cast(sql`count(*)`, "int")} from bookmarks where post_id = ${sql.cast(postId, "bigint")}) as bookmarks`;
 	check(after.likes === 0 && after.bookmarks === 0, "undoing by the repost's id works too", after);
 	r = await author.get("TweetResultByRestId", { tweetId: repostId });
 	check(r.data?.tweetResult?.result?.rest_id === postId, "opening a repost's id shows the original", r);
@@ -52,7 +52,7 @@ try {
 	check(r.data?.unretweet?.source_tweet_results?.result?.rest_id === postId, "undoing a repost by its own id", r);
 
 	// ---- a notification's preview of a post with a notice
-	await sql`update posts set notice = ${JSON.stringify({ type: "Misleading", text: "This post may be misleading." })}::text::jsonb where id = ${postId}::bigint`;
+	await sql`update posts set notice = ${sql.cast(JSON.stringify({ type: "Misleading", text: "This post may be misleading." }), "jsonb")} where id = ${sql.cast(postId, "bigint")}`;
 	await other.gql("FavoriteTweet", { tweet_id: postId });
 	r = await author.get("NotificationsTimeline", { timeline_type: "All", count: 20 });
 	const entries = r.data?.viewer_v2?.user_results?.result?.notification_timeline?.timeline?.instructions?.flatMap((i: any) => i.entries ?? []) ?? [];
@@ -64,7 +64,7 @@ try {
 	check(r.data?.tweetResult?.result?.softInterventionPivot?.softInterventionDisplayType === "Misleading", "the post itself keeps its notice", r.data?.tweetResult?.result?.__typename);
 
 	// ---- the parody label
-	await sql`update users set parody_label = 'None', parody_label_at = null where id = ${otherId}::bigint`;
+	await sql`update users set parody_label = 'None', parody_label_at = null where id = ${sql.cast(otherId, "bigint")}`;
 	r = await other.gql("AccountParodyScreenImplV2ParodyLabelMutation", { parodyProfileLabel: "Fan" });
 	check(r.data?.update_parody_label?.parody_commentary_fan_label === "Fan", "the label is set", r);
 	r = await author.get("UserByScreenName", { screen_name: otherName });
@@ -89,7 +89,7 @@ try {
 	check((await begin("abc")).includes("at least 4"), "a short name says it's too short");
 } finally {
 	for (const id of made) await author.gql("DeleteTweet", { tweet_id: id });
-	await sql`update users set parody_label = ${savedLabel.parody_label}, parody_label_at = ${savedLabel.parody_label_at} where id = ${otherId}::bigint`;
+	await sql`update users set parody_label = ${savedLabel.parody_label}, parody_label_at = ${savedLabel.parody_label_at} where id = ${sql.cast(otherId, "bigint")}`;
 }
 
 console.log(failed ? `${failed} failed` : "all passed");

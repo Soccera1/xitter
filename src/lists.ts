@@ -38,9 +38,9 @@ export const ALL_ID = "1";
 const fixed = () => new PostError("This list can't be changed.", 150);
 
 async function allRow(viewerId: string): Promise<ListRow | undefined> {
-	const [r] = await sql`select (select id::text from users where role = 'admin' order by created_at, id limit 1) as owner_id,
-		(select count(*)::int from users where status <> 'suspended') as members,
-		coalesce((select (preferences->>'all_tab_hidden')::boolean from users where id = ${viewerId}::bigint), false) as hidden`;
+	const [r] = await sql`select (select ${sql.cast(sql`id`, "text")} as id from users where role = 'admin' order by created_at, id limit 1) as owner_id,
+		(select ${sql.cast(sql`count(*)`, "int")} from users where status <> 'suspended') as members,
+		coalesce((select ${sql.cast(sql` (${sql.jsonGet(sql`preferences`, sql`'all_tab_hidden'`, true)})`, "boolean")} from users where id = ${sql.cast(viewerId, "bigint")}), false) as hidden`;
 	if (!r?.owner_id) return undefined;
 	return {
 		id: ALL_ID, owner_id: r.owner_id, name: "All", description: "Every post on this instance, newest first.",
@@ -50,7 +50,7 @@ async function allRow(viewerId: string): Promise<ListRow | undefined> {
 }
 
 async function setAllTab(viewerId: string, shown: boolean) {
-	await sql`update users set preferences = preferences || ${JSON.stringify({ all_tab_hidden: !shown })}::text::jsonb where id = ${viewerId}::bigint`;
+	await sql`update users set preferences = ${sql.jsonMerge(sql`preferences`, sql.cast(JSON.stringify({ all_tab_hidden: !shown }), "jsonb"))} where id = ${sql.cast(viewerId, "bigint")}`;
 }
 
 type ListRow = {
@@ -72,20 +72,20 @@ type ListRow = {
 // Lists the viewer may see: public ones and their own, and not the lists of
 // accounts blocking them. `target` is the account whose membership is_member reports.
 const listSelect = (viewerId: string, target = "0") => sql`
-	select l.id::text, l.owner_id::text, l.name, l.description, l.is_private, l.banner_media_id::text, l.created_at,
-		(select count(*)::int from list_members m where m.list_id = l.id) as member_count,
-		(select count(*)::int from list_subscribers s where s.list_id = l.id) as subscriber_count,
-		exists (select 1 from list_subscribers s where s.list_id = l.id and s.user_id = ${viewerId}::bigint) as following,
-		exists (select 1 from list_members m where m.list_id = l.id and m.user_id = ${target}::bigint) as is_member,
-		exists (select 1 from list_mutes x where x.list_id = l.id and x.user_id = ${viewerId}::bigint) as muting,
-		exists (select 1 from pinned_lists x where x.list_id = l.id and x.user_id = ${viewerId}::bigint) as pinning
+	select ${sql.cast(sql`l.id`, "text")} as id, ${sql.cast(sql`l.owner_id`, "text")} as owner_id, l.name, l.description, l.is_private, ${sql.cast(sql`l.banner_media_id`, "text")} as banner_media_id, l.created_at,
+		(select ${sql.cast(sql`count(*)`, "int")} from list_members m where m.list_id = l.id) as member_count,
+		(select ${sql.cast(sql`count(*)`, "int")} from list_subscribers s where s.list_id = l.id) as subscriber_count,
+		exists (select 1 from list_subscribers s where s.list_id = l.id and s.user_id = ${sql.cast(viewerId, "bigint")}) as following,
+		exists (select 1 from list_members m where m.list_id = l.id and m.user_id = ${sql.cast(target, "bigint")}) as is_member,
+		exists (select 1 from list_mutes x where x.list_id = l.id and x.user_id = ${sql.cast(viewerId, "bigint")}) as muting,
+		exists (select 1 from pinned_lists x where x.list_id = l.id and x.user_id = ${sql.cast(viewerId, "bigint")}) as pinning
 	from lists l`;
 
-const visible = (viewerId: string) => sql`(l.owner_id = ${viewerId}::bigint or (not l.is_private and l.owner_id not in ${blockedFor(viewerId)}))`;
+const visible = (viewerId: string) => sql`(l.owner_id = ${sql.cast(viewerId, "bigint")} or (not l.is_private and l.owner_id not in ${blockedFor(viewerId)}))`;
 
 async function oneList(viewerId: string, id: string, target?: string): Promise<ListRow | undefined> {
 	if (id === ALL_ID) return allRow(viewerId);
-	const [row] = await sql`${listSelect(viewerId, target)} where l.id = ${id}::bigint and ${visible(viewerId)}`;
+	const [row] = await sql`${listSelect(viewerId, target)} where l.id = ${sql.cast(id, "bigint")} and ${visible(viewerId)}`;
 	return row as ListRow | undefined;
 }
 
@@ -195,7 +195,7 @@ const userOf = (viewerId: string, vars: Vars) => (isId(vars.userId) ? vars.userI
 async function memberTimeline(viewerId: string, table: "list_members" | "list_subscribers", id: string, vars: Vars) {
 	const rows = vars.cursor
 		? []
-		: await sql`select t.user_id::text from ${sql(table)} t where t.list_id = ${id}::bigint
+		: await sql`select ${sql.cast(sql`t.user_id`, "text")} as user_id from ${sql(table)} t where t.list_id = ${sql.cast(id, "bigint")}
 			and t.user_id not in ${blockedFor(viewerId)} and t.user_id not in ${outOfView(viewerId)} order by t.created_at desc limit 200`;
 	const users = await usersByIds(viewerId, rows.map((r: any) => r.user_id));
 	const base = BigInt(newId());
@@ -232,10 +232,10 @@ async function create(v: Viewer, vars: Vars) {
 	const description = String(vars.description ?? "").trim();
 	if (description.length > MAX_DESCRIPTION) throw new PostError(`Descriptions can be up to ${MAX_DESCRIPTION} characters.`, 214);
 	if (forbiddenText(name, description)) throw new PostError("The list contains a word this instance doesn't allow.", 186);
-	const [count] = await sql`select count(*)::int as n from lists where owner_id = ${v.id}::bigint`;
+	const [count] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from lists where owner_id = ${sql.cast(v.id, "bigint")}`;
 	if (count.n >= MAX_LISTS) throw new PostError("You can't have more lists.", 214);
 	const id = newId();
-	await sql`insert into lists (id, owner_id, name, description, is_private) values (${id}::bigint, ${v.id}::bigint, ${name}, ${description}, ${!!vars.isPrivate})`;
+	await sql`insert into lists (id, owner_id, name, description, is_private) values (${sql.cast(id, "bigint")}, ${sql.cast(v.id, "bigint")}, ${name}, ${description}, ${!!vars.isPrivate})`;
 	return { data: { list: await one(v.id, id) } };
 }
 
@@ -248,9 +248,9 @@ async function update(v: Viewer, vars: Vars) {
 	if (description.length > MAX_DESCRIPTION) throw new PostError(`Descriptions can be up to ${MAX_DESCRIPTION} characters.`, 214);
 	if (forbiddenText(name, description)) throw new PostError("The list contains a word this instance doesn't allow.", 186);
 	const isPrivate = vars.isPrivate === undefined ? row.is_private : !!vars.isPrivate;
-	await sql`update lists set name = ${name}, description = ${description}, is_private = ${isPrivate} where id = ${id}::bigint`;
+	await sql`update lists set name = ${name}, description = ${description}, is_private = ${isPrivate} where id = ${sql.cast(id, "bigint")}`;
 	// a list turning private loses the subscribers who aren't its owner
-	if (isPrivate) await sql`delete from list_subscribers where list_id = ${id}::bigint and user_id <> ${v.id}::bigint`;
+	if (isPrivate) await sql`delete from list_subscribers where list_id = ${sql.cast(id, "bigint")} and user_id <> ${sql.cast(v.id, "bigint")}`;
 	return { data: { list: await one(v.id, id) } };
 }
 
@@ -259,15 +259,15 @@ async function member(v: Viewer, vars: Vars, on: boolean) {
 	await requireOwn(v.id, id);
 	if (!isId(vars.userId)) throw new PostError("Invalid user id.", 144);
 	if (on) {
-		const [blocked] = await sql`select 1 from blocks where (blocker_id = ${vars.userId}::bigint and blocked_id = ${v.id}::bigint) or (blocker_id = ${v.id}::bigint and blocked_id = ${vars.userId}::bigint)`;
+		const [blocked] = await sql`select 1 from blocks where (blocker_id = ${sql.cast(vars.userId, "bigint")} and blocked_id = ${sql.cast(v.id, "bigint")}) or (blocker_id = ${sql.cast(v.id, "bigint")} and blocked_id = ${sql.cast(vars.userId, "bigint")})`;
 		if (blocked) throw new PostError("You can't add this account to a list.", 150);
-		const [exists] = await sql`select 1 from users where id = ${vars.userId}::bigint`;
+		const [exists] = await sql`select 1 from users where id = ${sql.cast(vars.userId, "bigint")}`;
 		if (!exists) throw new PostError("User not found.", 144);
-		const [n] = await sql`select count(*)::int as n from list_members where list_id = ${id}::bigint`;
+		const [n] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from list_members where list_id = ${sql.cast(id, "bigint")}`;
 		if (n.n >= MAX_MEMBERS) throw new PostError("This list is full.", 214);
-		await sql`insert into list_members (list_id, user_id) values (${id}::bigint, ${vars.userId}::bigint) on conflict do nothing`;
+		await sql`insert into list_members (list_id, user_id) values (${sql.cast(id, "bigint")}, ${sql.cast(vars.userId, "bigint")}) on conflict do nothing`;
 	} else {
-		await sql`delete from list_members where list_id = ${id}::bigint and user_id = ${vars.userId}::bigint`;
+		await sql`delete from list_members where list_id = ${sql.cast(id, "bigint")} and user_id = ${sql.cast(vars.userId, "bigint")}`;
 	}
 	return { data: { list: await one(v.id, id) } };
 }
@@ -278,9 +278,9 @@ async function subscribe(v: Viewer, vars: Vars, on: boolean) {
 	const row = await requireList(v.id, id);
 	if (on) {
 		if (row.is_private && row.owner_id !== v.id) throw missing();
-		await sql`insert into list_subscribers (list_id, user_id) values (${id}::bigint, ${v.id}::bigint) on conflict do nothing`;
+		await sql`insert into list_subscribers (list_id, user_id) values (${sql.cast(id, "bigint")}, ${sql.cast(v.id, "bigint")}) on conflict do nothing`;
 	} else {
-		await sql`delete from list_subscribers where list_id = ${id}::bigint and user_id = ${v.id}::bigint`;
+		await sql`delete from list_subscribers where list_id = ${sql.cast(id, "bigint")} and user_id = ${sql.cast(v.id, "bigint")}`;
 	}
 	const list = await one(v.id, id);
 	return { data: on ? { list_subscribe_v3: list } : { list } };
@@ -290,41 +290,41 @@ async function mute(v: Viewer, vars: Vars, on: boolean) {
 	const id = listId(vars);
 	if (id === ALL_ID) throw fixed();
 	await requireList(v.id, id);
-	if (on) await sql`insert into list_mutes (list_id, user_id) values (${id}::bigint, ${v.id}::bigint) on conflict do nothing`;
-	else await sql`delete from list_mutes where list_id = ${id}::bigint and user_id = ${v.id}::bigint`;
+	if (on) await sql`insert into list_mutes (list_id, user_id) values (${sql.cast(id, "bigint")}, ${sql.cast(v.id, "bigint")}) on conflict do nothing`;
+	else await sql`delete from list_mutes where list_id = ${sql.cast(id, "bigint")} and user_id = ${sql.cast(v.id, "bigint")}`;
 	return { data: { list_mute: "Done" } };
 }
 
 // X's own order on the management page: pinned first, then owned, then subscribed
 async function managementRows(viewerId: string): Promise<ListRow[]> {
 	return (await sql`${listSelect(viewerId)}
-		left join pinned_lists p on p.list_id = l.id and p.user_id = ${viewerId}::bigint
-		where l.owner_id = ${viewerId}::bigint or exists (select 1 from list_subscribers s where s.list_id = l.id and s.user_id = ${viewerId}::bigint)
-		order by (p.list_id is null), p.position, (l.owner_id <> ${viewerId}::bigint), l.created_at desc`) as ListRow[];
+		left join pinned_lists p on p.list_id = l.id and p.user_id = ${sql.cast(viewerId, "bigint")}
+		where l.owner_id = ${sql.cast(viewerId, "bigint")} or exists (select 1 from list_subscribers s where s.list_id = l.id and s.user_id = ${sql.cast(viewerId, "bigint")})
+		order by (p.list_id is null), p.position, (l.owner_id <> ${sql.cast(viewerId, "bigint")}), l.created_at desc`) as ListRow[];
 }
 
 async function ownedBy(viewerId: string, userId: string, target?: string): Promise<ListRow[]> {
-	return (await sql`${listSelect(viewerId, target)} where l.owner_id = ${userId}::bigint and ${visible(viewerId)} order by l.created_at desc`) as ListRow[];
+	return (await sql`${listSelect(viewerId, target)} where l.owner_id = ${sql.cast(userId, "bigint")} and ${visible(viewerId)} order by l.created_at desc`) as ListRow[];
 }
 
 // lists a user owns or follows, public ones unless the viewer is that user
 async function combinedFor(viewerId: string, userId: string, target?: string): Promise<ListRow[]> {
 	return (await sql`${listSelect(viewerId, target)}
-		where (l.owner_id = ${userId}::bigint or exists (select 1 from list_subscribers s where s.list_id = l.id and s.user_id = ${userId}::bigint))
+		where (l.owner_id = ${sql.cast(userId, "bigint")} or exists (select 1 from list_subscribers s where s.list_id = l.id and s.user_id = ${sql.cast(userId, "bigint")}))
 			and ${visible(viewerId)}
-		order by (l.owner_id <> ${userId}::bigint), l.created_at desc`) as ListRow[];
+		order by (l.owner_id <> ${sql.cast(userId, "bigint")}), l.created_at desc`) as ListRow[];
 }
 
 async function membershipsOf(viewerId: string, userId: string): Promise<ListRow[]> {
 	return (await sql`${listSelect(viewerId)}
-		where exists (select 1 from list_members m where m.list_id = l.id and m.user_id = ${userId}::bigint) and not l.is_private and l.owner_id not in ${blockedFor(viewerId)}
+		where exists (select 1 from list_members m where m.list_id = l.id and m.user_id = ${sql.cast(userId, "bigint")}) and not l.is_private and l.owner_id not in ${blockedFor(viewerId)}
 		order by l.created_at desc limit 100`) as ListRow[];
 }
 
 async function discover(viewerId: string): Promise<ListRow[]> {
 	return (await sql`${listSelect(viewerId)}
-		where not l.is_private and l.owner_id <> ${viewerId}::bigint and l.owner_id not in ${blockedFor(viewerId)} and l.owner_id not in ${outOfView(viewerId)}
-			and not exists (select 1 from list_subscribers s where s.list_id = l.id and s.user_id = ${viewerId}::bigint)
+		where not l.is_private and l.owner_id <> ${sql.cast(viewerId, "bigint")} and l.owner_id not in ${blockedFor(viewerId)} and l.owner_id not in ${outOfView(viewerId)}
+			and not exists (select 1 from list_subscribers s where s.list_id = l.id and s.user_id = ${sql.cast(viewerId, "bigint")})
 			and (select count(*) from list_members m where m.list_id = l.id) > 0
 		order by (select count(*) from list_subscribers s where s.list_id = l.id) desc, l.created_at desc limit 50`) as ListRow[];
 }
@@ -333,8 +333,8 @@ async function discover(viewerId: string): Promise<ListRow[]> {
 async function recommended(viewerId: string, id: string, vars: Vars) {
 	const rows = vars.cursor
 		? []
-		: await sql`select f.followee_id::text as user_id from follows f where f.follower_id = ${viewerId}::bigint
-			and f.followee_id not in (select user_id from list_members where list_id = ${id}::bigint)
+		: await sql`select ${sql.cast(sql`f.followee_id`, "text")} as user_id from follows f where f.follower_id = ${sql.cast(viewerId, "bigint")}
+			and f.followee_id not in (select user_id from list_members where list_id = ${sql.cast(id, "bigint")})
 			and f.followee_id not in ${blockedFor(viewerId)} order by f.created_at desc limit 20`;
 	const users = await usersByIds(viewerId, rows.map((r: any) => r.user_id));
 	const base = BigInt(newId());
@@ -345,7 +345,7 @@ async function recommended(viewerId: string, id: string, vars: Vars) {
 // Pinned lists are extra tabs on the home page. The client reads each pinned
 // item as { __typename: "ListPinnedTimeline", list }.
 async function pinnedItems(viewerId: string) {
-	const rows = (await sql`${listSelect(viewerId)} join pinned_lists p on p.list_id = l.id and p.user_id = ${viewerId}::bigint
+	const rows = (await sql`${listSelect(viewerId)} join pinned_lists p on p.list_id = l.id and p.user_id = ${sql.cast(viewerId, "bigint")}
 		where ${visible(viewerId)} order by p.position`) as ListRow[];
 	const all = await allRow(viewerId);
 	if (all?.pinning) rows.unshift(all);
@@ -354,7 +354,7 @@ async function pinnedItems(viewerId: string) {
 
 async function pinnableItems(viewerId: string) {
 	const rows = (await sql`${listSelect(viewerId)}
-		where l.owner_id = ${viewerId}::bigint or exists (select 1 from list_subscribers s where s.list_id = l.id and s.user_id = ${viewerId}::bigint)
+		where l.owner_id = ${sql.cast(viewerId, "bigint")} or exists (select 1 from list_subscribers s where s.list_id = l.id and s.user_id = ${sql.cast(viewerId, "bigint")})
 		order by l.created_at desc`) as ListRow[];
 	const all = await allRow(viewerId);
 	if (all) rows.unshift(all);
@@ -364,11 +364,11 @@ async function pinnableItems(viewerId: string) {
 const MAX_PINNED = 5;
 
 async function setPinnedLists(viewerId: string, ids: string[]) {
-	await sql`delete from pinned_lists where user_id = ${viewerId}::bigint`;
+	await sql`delete from pinned_lists where user_id = ${sql.cast(viewerId, "bigint")}`;
 	let position = 0;
 	for (const id of ids.slice(0, MAX_PINNED)) {
 		if (!(await oneList(viewerId, id))) continue;
-		await sql`insert into pinned_lists (user_id, list_id, position) values (${viewerId}::bigint, ${id}::bigint, ${position++}) on conflict do nothing`;
+		await sql`insert into pinned_lists (user_id, list_id, position) values (${sql.cast(viewerId, "bigint")}, ${sql.cast(id, "bigint")}, ${position++}) on conflict do nothing`;
 	}
 }
 
@@ -385,13 +385,13 @@ async function pinOne(v: Viewer, vars: Vars, on: boolean) {
 	if (id === ALL_ID) {
 		// stored in preferences, above
 	} else if (on) {
-		const [n] = await sql`select count(*)::int as n from pinned_lists where user_id = ${v.id}::bigint`;
+		const [n] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from pinned_lists where user_id = ${sql.cast(v.id, "bigint")}`;
 		if (n.n >= MAX_PINNED) {
 			return { data: { pin_timeline: { __typename: "PinTimelineErrorResult", reason: "LimitReached", message: `You can pin up to ${MAX_PINNED} lists.` } } };
 		}
-		await sql`insert into pinned_lists (user_id, list_id, position) values (${v.id}::bigint, ${id}::bigint, ${n.n}) on conflict do nothing`;
+		await sql`insert into pinned_lists (user_id, list_id, position) values (${sql.cast(v.id, "bigint")}, ${sql.cast(id, "bigint")}, ${n.n}) on conflict do nothing`;
 	} else {
-		await sql`delete from pinned_lists where user_id = ${v.id}::bigint and list_id = ${id}::bigint`;
+		await sql`delete from pinned_lists where user_id = ${sql.cast(v.id, "bigint")} and list_id = ${sql.cast(id, "bigint")}`;
 	}
 	const list = await one(v.id, id);
 	return { data: { [key]: { __typename: on ? "PinTimelineSuccessResult" : "UnpinTimelineSuccessResult", updated_pinned_timeline: { __typename: "ListPinnedTimeline", list } } } };
@@ -403,7 +403,7 @@ export const listHandlers = {
 	DeleteList: async (v: Viewer, vars: Vars) => {
 		const id = listId(vars);
 		await requireOwn(v.id, id);
-		await sql`delete from lists where id = ${id}::bigint`;
+		await sql`delete from lists where id = ${sql.cast(id, "bigint")}`;
 		return { data: { list_delete: "Done" } };
 	},
 	ListByRestId: async (v: Viewer, vars: Vars) => ({ data: { list: await one(v.id, listId(vars)) } }),
@@ -426,15 +426,15 @@ export const listHandlers = {
 	EditListBanner: async (v: Viewer, vars: Vars) => {
 		const id = listId(vars);
 		await requireOwn(v.id, id);
-		const [media] = isId(vars.mediaId) ? await sql`select 1 from media where id = ${vars.mediaId}::bigint and user_id = ${v.id}::bigint` : [];
+		const [media] = isId(vars.mediaId) ? await sql`select 1 from media where id = ${sql.cast(vars.mediaId, "bigint")} and user_id = ${sql.cast(v.id, "bigint")}` : [];
 		if (!media) throw new PostError("That image isn't available.", 214);
-		await sql`update lists set banner_media_id = ${vars.mediaId}::bigint where id = ${id}::bigint`;
+		await sql`update lists set banner_media_id = ${sql.cast(vars.mediaId, "bigint")} where id = ${sql.cast(id, "bigint")}`;
 		return { data: { list: await one(v.id, id) } };
 	},
 	DeleteListBanner: async (v: Viewer, vars: Vars) => {
 		const id = listId(vars);
 		await requireOwn(v.id, id);
-		await sql`update lists set banner_media_id = null where id = ${id}::bigint`;
+		await sql`update lists set banner_media_id = null where id = ${sql.cast(id, "bigint")}`;
 		return { data: { list: await one(v.id, id) } };
 	},
 

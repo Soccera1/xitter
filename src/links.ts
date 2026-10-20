@@ -138,8 +138,8 @@ export async function previewsFor(urls: string[]): Promise<Map<string, Preview>>
 	const wanted = [...new Set(urls.filter(previewable))];
 	if (!wanted.length) return new Map();
 	const rows = await sql`select url, ok, title, description, site, image, width, height,
-			fetched_at < now() - (case when ok then ${REFRESH} else ${RETRY_FAILED} end)::interval as stale
-		from link_previews where url = any(${sql.array(wanted, "TEXT")})`;
+			fetched_at < now() - ${sql.cast(sql` (case when ok then ${REFRESH} else ${RETRY_FAILED} end)`, "interval")} as stale
+		from link_previews where ${sql.contains(sql.array(wanted, "TEXT"), sql`url`)}`;
 	const known = new Map(rows.map((r: any) => [r.url as string, r]));
 	for (const url of wanted) if (!known.has(url) || known.get(url).stale) void fetchPreview(url);
 	return new Map(rows.filter((r: any) => r.ok).map((r: any) => [r.url as string, r as Preview]));

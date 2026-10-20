@@ -52,13 +52,14 @@ export const atLeast = (role: Role, min: Role) => rolesRank[role] >= rolesRank[m
 
 export async function communityRows(viewerId: string, ids: string[]): Promise<Map<string, CommunityRow>> {
 	if (!ids.length) return new Map();
-	const rows = await sql`select c.id::text, c.creator_id::text, c.name, c.description, c.question, c.join_policy, c.invites_policy, c.is_nsfw, c.banner_url, c.banner_width, c.banner_height, c.created_at,
-			c.topic_id::text as topic_id, (select t.name from topics t where t.id = c.topic_id) as topic_name,
-			(select count(*)::int from community_members m where m.community_id = c.id) as member_count,
-			(select count(*)::int from community_members m where m.community_id = c.id and m.role in ('Moderator', 'Admin')) as moderator_count,
-			coalesce((select m.role from community_members m where m.community_id = c.id and m.user_id = ${viewerId}::bigint), 'NonMember') as role,
-			exists (select 1 from community_join_requests r where r.community_id = c.id and r.user_id = ${viewerId}::bigint) as requested
-		from communities c where c.id = any(${sql.array(ids, "INT8")})`;
+	const rows = await sql`select ${sql.cast(sql`c.id`, "text")} as id, ${sql.cast(sql`c.creator_id`, "text")} as creator_id, c.name, c.description, c.question, c.join_policy, c.invites_policy, c.is_nsfw, c.banner_url, c.banner_width, c.banner_height, c.created_at,
+			${sql.cast(sql`
+			c.topic_id`, "text")} as topic_id, (select t.name from topics t where t.id = c.topic_id) as topic_name,
+			(select ${sql.cast(sql`count(*)`, "int")} from community_members m where m.community_id = c.id) as member_count,
+			(select ${sql.cast(sql`count(*)`, "int")} from community_members m where m.community_id = c.id and m.role in ('Moderator', 'Admin')) as moderator_count,
+			coalesce((select m.role from community_members m where m.community_id = c.id and m.user_id = ${sql.cast(viewerId, "bigint")}), 'NonMember') as role,
+			exists (select 1 from community_join_requests r where r.community_id = c.id and r.user_id = ${sql.cast(viewerId, "bigint")}) as requested
+		from communities c where ${sql.contains(sql.array(ids, "INT8"), sql`c.id`)}`;
 	return new Map(rows.map((r: any) => [r.id as string, r as CommunityRow]));
 }
 
@@ -89,11 +90,11 @@ export async function communityObjects(viewerId: string, ids: string[]): Promise
 	const rows = await communityRows(viewerId, ids);
 	if (!rows.size) return new Map();
 	const list = [...rows.keys()];
-	const ruleRows = await sql`select id::text, community_id::text, name, description from community_rules
-		where community_id = any(${sql.array(list, "INT8")}) order by position, id`;
-	const faceRows = await sql`select community_id::text, user_id::text from (
+	const ruleRows = await sql`select ${sql.cast(sql`id`, "text")} as id, ${sql.cast(sql`community_id`, "text")} as community_id, name, description from community_rules
+		where ${sql.contains(sql.array(list, "INT8"), sql`community_id`)} order by position, id`;
+	const faceRows = await sql`select ${sql.cast(sql`community_id`, "text")} as community_id, ${sql.cast(sql`user_id`, "text")} as user_id from (
 			select m.community_id, m.user_id, row_number() over (partition by m.community_id order by m.created_at) as n
-			from community_members m where m.community_id = any(${sql.array(list, "INT8")})) x where n <= 3`;
+			from community_members m where ${sql.contains(sql.array(list, "INT8"), sql`m.community_id`)}) x where n <= 3`;
 	const userIds = new Set<string>();
 	for (const r of rows.values()) userIds.add(r.creator_id);
 	for (const f of faceRows) userIds.add(f.user_id);

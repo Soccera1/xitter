@@ -10,13 +10,13 @@ import type { Viewer } from "./auth";
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
 async function state(userId: string) {
-	const [u] = await sql`select totp_enabled, totp_pending, password_hash from users where id = ${userId}::bigint`;
+	const [u] = await sql`select totp_enabled, totp_pending, password_hash from users where id = ${sql.cast(userId, "bigint")}`;
 	return u as { totp_enabled: boolean; totp_pending: string | null; password_hash: string };
 }
 
 // a six-digit app code, or one of the one-time backup codes (spent when used)
 export async function codeAccepted(userId: string, input: string): Promise<boolean> {
-	const [u] = await sql`select totp_secret, totp_backup from users where id = ${userId}::bigint and totp_enabled`;
+	const [u] = await sql`select totp_secret, totp_backup from users where id = ${sql.cast(userId, "bigint")} and totp_enabled`;
 	if (!u?.totp_secret) return false;
 	if (verifyCode(u.totp_secret, input)) return true;
 	const clean = input.replace(/[\s-]/g, "").toLowerCase();
@@ -24,7 +24,7 @@ export async function codeAccepted(userId: string, input: string): Promise<boole
 	const hit = hashes.indexOf(sha(clean));
 	if (!/^\d{6}$/.test(clean) || hit < 0) return false;
 	hashes.splice(hit, 1);
-	await sql`update users set totp_backup = ${JSON.stringify(hashes)}::text::jsonb where id = ${userId}::bigint`;
+	await sql`update users set totp_backup = ${sql.cast(JSON.stringify(hashes), "jsonb")} where id = ${sql.cast(userId, "bigint")}`;
 	return true;
 }
 
@@ -32,31 +32,31 @@ export async function codeAccepted(userId: string, input: string): Promise<boole
 // 15 minute, five-guess challenge the code screen answers.
 export async function startChallenge(screenName: string, password: string): Promise<string | undefined> {
 	if (password.length > 1024 || screenName.length > 64) return undefined;
-	const [u] = await sql`select id::text, password_hash, totp_enabled from users where lower(screen_name) = lower(${screenName})
-		and (status <> 'suspended' or deactivated_at > now() - interval '30 days')`;
+	const [u] = await sql`select ${sql.cast(sql`id`, "text")} as id, password_hash, totp_enabled from users where lower(screen_name) = lower(${screenName})
+		and (status <> 'suspended' or deactivated_at > now() - ${sql.duration(30, "day")})`;
 	if (!u?.totp_enabled) return undefined;
 	if (!(await Bun.password.verify(password, u.password_hash).catch(() => false))) return undefined;
 	const token = crypto.randomUUID();
-	await sql`delete from login_challenges where created_at < now() - interval '15 minutes'`;
-	await sql`insert into login_challenges (token, user_id) values (${token}::uuid, ${u.id}::bigint)`;
+	await sql`delete from login_challenges where created_at < now() - ${sql.duration(15, "minute")}`;
+	await sql`insert into login_challenges (token, user_id) values (${sql.cast(token, "uuid")}, ${sql.cast(u.id, "bigint")})`;
 	return token;
 }
 
 export async function answerChallenge(token: string, code: string): Promise<{ userId?: string; error?: string; unknown?: boolean }> {
 	if (!/^[0-9a-f-]{36}$/i.test(token)) return { unknown: true };
-	const [c] = await sql`select user_id::text, attempts from login_challenges where token = ${token}::uuid and created_at > now() - interval '15 minutes'`;
+	const [c] = await sql`select ${sql.cast(sql`user_id`, "text")} as user_id, attempts from login_challenges where token = ${sql.cast(token, "uuid")} and created_at > now() - ${sql.duration(15, "minute")}`;
 	if (!c) return { unknown: true };
 	if (c.attempts >= 5) {
-		await sql`delete from login_challenges where token = ${token}::uuid`;
+		await sql`delete from login_challenges where token = ${sql.cast(token, "uuid")}`;
 		return { error: "Too many wrong codes. Start signing in again." };
 	}
 	if (!(await codeAccepted(c.user_id, code))) {
-		await sql`update login_challenges set attempts = attempts + 1 where token = ${token}::uuid`;
+		await sql`update login_challenges set attempts = attempts + 1 where token = ${sql.cast(token, "uuid")}`;
 		return { error: "That code isn't right. Check your authenticator app and try again." };
 	}
-	await sql`delete from login_challenges where token = ${token}::uuid`;
-	const [u] = await sql`select status, deactivated_at > now() - interval '30 days' as returning from users where id = ${c.user_id}::bigint`;
-	if (u?.returning) await sql`update users set status = 'active', deactivated_at = null where id = ${c.user_id}::bigint`;
+	await sql`delete from login_challenges where token = ${sql.cast(token, "uuid")}`;
+	const [u] = await sql`select status, deactivated_at > now() - ${sql.duration(30, "day")} as "returning" from users where id = ${sql.cast(c.user_id, "bigint")}`;
+	if (u?.returning) await sql`update users set status = 'active', deactivated_at = null where id = ${sql.cast(c.user_id, "bigint")}`;
 	else if (!u || u.status === "suspended") return { error: "This account is suspended." };
 	return { userId: c.user_id };
 }
@@ -94,14 +94,14 @@ export async function twoFactorRoute(req: Request, url: URL, viewer: Viewer): Pr
 
 	if (req.method === "POST" && sub === "/start" && !u.totp_enabled) {
 		const secret = newSecret();
-		await sql`update users set totp_pending = ${secret} where id = ${viewer.id}::bigint`;
+		await sql`update users set totp_pending = ${secret} where id = ${sql.cast(viewer.id, "bigint")}`;
 		return setup(req, secret, viewer);
 	}
 	if (req.method === "POST" && sub === "/confirm" && !u.totp_enabled && u.totp_pending) {
 		if (!verifyCode(u.totp_pending, field("code"))) return setup(req, u.totp_pending, viewer, "That code isn't right. Try the next one your app shows.");
 		const backups = Array.from({ length: 8 }, () => String(randomInt(0, 1_000_000)).padStart(6, "0"));
 		await sql`update users set totp_enabled = true, totp_secret = totp_pending, totp_pending = null,
-			totp_backup = ${JSON.stringify(backups.map(sha))}::text::jsonb where id = ${viewer.id}::bigint`;
+			totp_backup = ${sql.cast(JSON.stringify(backups.map(sha)), "jsonb")} where id = ${sql.cast(viewer.id, "bigint")}`;
 		return page(
 			req,
 			viewer,
@@ -112,7 +112,7 @@ export async function twoFactorRoute(req: Request, url: URL, viewer: Viewer): Pr
 	if (req.method === "POST" && sub === "/disable" && u.totp_enabled) {
 		const ok = await Bun.password.verify(field("password"), u.password_hash).catch(() => false);
 		if (!ok || !(await codeAccepted(viewer.id, field("code")))) return status(req, viewer, true, "The password or the code isn't right.");
-		await sql`update users set totp_enabled = false, totp_secret = null, totp_pending = null, totp_backup = '[]'::jsonb where id = ${viewer.id}::bigint`;
+		await sql`update users set totp_enabled = false, totp_secret = null, totp_pending = null, totp_backup = ${sql.cast(sql`'[]'`, "jsonb")} where id = ${sql.cast(viewer.id, "bigint")}`;
 		return status(req, viewer, false);
 	}
 	return status(req, viewer, u.totp_enabled);

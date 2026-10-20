@@ -20,7 +20,7 @@ const signIn = async (password: string) =>
 const id = await createUser(name, "Reset Test", "testpass123");
 try {
 	const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
-	await sql`insert into password_resets (token_hash, user_id) values (${createHash("sha256").update(token).digest("hex")}, ${id}::bigint)`;
+	await sql`insert into password_resets (token_hash, user_id) values (${createHash("sha256").update(token).digest("hex")}, ${sql.cast(id, "bigint")})`;
 
 	check("the page opens for a good token", (await fetch(`${origin}/account/reset?token=${token}`)).status === 200);
 	check("a made-up token is refused", (await fetch(`${origin}/account/reset?token=${"a".repeat(64)}`)).status === 410);
@@ -34,7 +34,7 @@ try {
 	check("the token works once", (await post("another789")).status === 410);
 	check("the forgot page opens", (await fetch(`${origin}/account/forgot`)).status === 200);
 } finally {
-	await sql`delete from users where id = ${id}::bigint`;
+	await sql`delete from users where id = ${sql.cast(id, "bigint")}`;
 }
 console.log(failures ? `${failures} FAILED` : "all passed");
 process.exit(failures ? 1 : 0);

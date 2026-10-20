@@ -34,9 +34,9 @@ try {
 	check(page.status === 200 && (await page.text()).includes(person), "its own Organisation page manages affiliates");
 	check((await admin.admin("addAffiliate", { orgId: made[1], screen_name: gov })).status >= 400, "a plain account still isn't an organisation");
 	await admin.admin("setBadge", { id: made[0], badge: "blue" });
-	check(!(await sql`select 1 from affiliations where org_id = ${made[0]}::bigint`).length, "losing the grey badge ends its affiliations");
+	check(!(await sql`select 1 from affiliations where org_id = ${sql.cast(made[0], "bigint")}`).length, "losing the grey badge ends its affiliations");
 	console.log(`all passed (${checks})`);
 } finally {
-	for (const id of made) await sql`delete from users where id = ${id}::bigint`;
+	for (const id of made) await sql`delete from users where id = ${sql.cast(id, "bigint")}`;
 	await sql.end();
 }

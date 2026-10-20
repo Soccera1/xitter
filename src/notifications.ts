@@ -7,7 +7,7 @@
 import { hasMutedWord, suspendedFor } from "./blocks";
 import type { User } from "./auth";
 import { PUBLIC_ORIGIN } from "./config";
-import { sql, databaseBackend } from "./db";
+import { sql } from "./db";
 import { plainTweetResult, tweetResult, userResult } from "./model";
 import type { PostRow } from "./model";
 import { postsByIds } from "./posts";
@@ -33,9 +33,9 @@ async function items(viewerId: string, opts: { before?: number; after?: number; 
 	const hi = opts.before ? new Date(opts.before) : new Date(8.64e15);
 	const out: Item[] = [];
 	// nothing from blocked or muted accounts, nor posts holding a muted word
-	const hidden = sql`(select blocked_id as id from blocks where blocker_id = ${viewerId}::bigint
-		union all select blocker_id from blocks where blocked_id = ${viewerId}::bigint
-		union all select muted_id from mutes where muter_id = ${viewerId}::bigint
+	const hidden = sql`(select blocked_id as id from blocks where blocker_id = ${sql.cast(viewerId, "bigint")}
+		union all select blocker_id from blocks where blocked_id = ${sql.cast(viewerId, "bigint")}
+		union all select muted_id from mutes where muter_id = ${sql.cast(viewerId, "bigint")}
 		union all select id from users where id in ${suspendedFor(viewerId)})`;
 
 	if (!opts.mentionsOnly) {
@@ -45,10 +45,10 @@ async function items(viewerId: string, opts: { before?: number; after?: number; 
 			// grouped, found by time, instead of every post the viewer ever had liked
 			const recent = opts.after !== undefined ? sql`and a.post_id in (select n.post_id from ${table} n where n.created_at >= ${lo})` : sql``;
 			const rows = await sql`
-				select a.post_id, max(a.created_at) as at, count(*)::int as total,
-					${databaseBackend === "sqlite" ? sql`json_group_array(cast(a.user_id as text) order by a.created_at desc)` : sql`(array_agg(a.user_id order by a.created_at desc))[1:${SHOWN_USERS}]`} as users
+				select a.post_id, max(a.created_at) as at, ${sql.cast(sql`count(*)`, "int")} as total,
+					${sql.arrayAgg(sql.cast(sql`a.user_id`, "text"), sql`a.created_at desc`)} as users
 				from ${table} a join posts p on p.id = a.post_id
-				where p.user_id = ${viewerId}::bigint and a.user_id <> ${viewerId}::bigint and a.user_id not in ${hidden} ${recent}
+				where p.user_id = ${sql.cast(viewerId, "bigint")} and a.user_id <> ${sql.cast(viewerId, "bigint")} and a.user_id not in ${hidden} ${recent}
 				group by a.post_id
 				having max(a.created_at) >= ${lo} and max(a.created_at) < ${hi}
 				order by at desc limit ${opts.limit}`;
@@ -56,10 +56,10 @@ async function items(viewerId: string, opts: { before?: number; after?: number; 
 				out.push({ kind, key: `${kind}-${r.post_id}`, at: ms(r.at), users: r.users.slice(0, SHOWN_USERS).map(String), total: r.total, postId: String(r.post_id) });
 		}
 		const follows = await sql`
-			select date_trunc('day', f.created_at) as day, max(f.created_at) as at, count(*)::int as total,
-				${databaseBackend === "sqlite" ? sql`json_group_array(cast(f.follower_id as text) order by f.created_at desc)` : sql`(array_agg(f.follower_id order by f.created_at desc))[1:${SHOWN_USERS}]`} as users
-			from follows f where f.followee_id = ${viewerId}::bigint and f.follower_id not in ${hidden}
-				and f.created_at >= date_trunc('day', ${lo}::timestamptz)
+			select date_trunc('day', f.created_at) as day, max(f.created_at) as at, ${sql.cast(sql`count(*)`, "int")} as total,
+				${sql.arrayAgg(sql.cast(sql`f.follower_id`, "text"), sql`f.created_at desc`)} as users
+			from follows f where f.followee_id = ${sql.cast(viewerId, "bigint")} and f.follower_id not in ${hidden}
+				and f.created_at >= date_trunc('day', ${sql.cast(lo, "timestamptz")})
 			group by 1
 			having max(f.created_at) >= ${lo} and max(f.created_at) < ${hi}
 			order by at desc limit ${opts.limit}`;
@@ -67,7 +67,7 @@ async function items(viewerId: string, opts: { before?: number; after?: number; 
 
 		// posts made after the bell was rung; replies don't count, as on X
 		const rung = await sql`select p.id, p.user_id, p.created_at as at from posts p
-			join post_notifications pn on pn.target_id = p.user_id and pn.user_id = ${viewerId}::bigint
+			join post_notifications pn on pn.target_id = p.user_id and pn.user_id = ${sql.cast(viewerId, "bigint")}
 			where p.reply_to_id is null and not p.hidden and p.created_at > pn.created_at and p.user_id not in ${hidden}
 				and p.created_at >= ${lo} and p.created_at < ${hi}
 			order by p.created_at desc limit ${opts.limit}`;
@@ -75,17 +75,17 @@ async function items(viewerId: string, opts: { before?: number; after?: number; 
 
 		const team = `the ${settings().instance_name} team`;
 		const messages = await sql`select id, kind, body, created_at as at from staff_messages
-			where user_id = ${viewerId}::bigint and revoked_at is null and created_at >= ${lo} and created_at < ${hi} order by created_at desc limit ${opts.limit}`;
+			where user_id = ${sql.cast(viewerId, "bigint")} and revoked_at is null and created_at >= ${lo} and created_at < ${hi} order by created_at desc limit ${opts.limit}`;
 		for (const r of messages) {
 			const what = r.kind === "strike" ? "A strike" : r.kind === "warning" ? "A warning" : "A message";
 			out.push({ kind: "staff", key: `staff-${r.id}`, at: ms(r.at), text: `${what} from ${team}: ${clip(r.body)}` });
 		}
 		const appeals = await sql`select id, status, resolved_at as at from moderation_appeals
-			where user_id = ${viewerId}::bigint and resolved_at >= ${lo} and resolved_at < ${hi} order by resolved_at desc limit ${opts.limit}`;
+			where user_id = ${sql.cast(viewerId, "bigint")} and resolved_at >= ${lo} and resolved_at < ${hi} order by resolved_at desc limit ${opts.limit}`;
 		for (const r of appeals)
 			out.push({ kind: "staff", key: `appeal-${r.id}`, at: ms(r.at), text: `${team[0].toUpperCase()}${team.slice(1)} ${r.status === "accepted" ? "accepted" : "turned down"} your appeal.` });
 		const asked = await sql`select o.id, o.screen_name, r.created_at as at from affiliation_requests r join users o on o.id = r.org_id
-			where r.user_id = ${viewerId}::bigint and r.created_at >= ${lo} and r.created_at < ${hi} order by r.created_at desc limit ${opts.limit}`;
+			where r.user_id = ${sql.cast(viewerId, "bigint")} and r.created_at >= ${lo} and r.created_at < ${hi} order by r.created_at desc limit ${opts.limit}`;
 		for (const r of asked)
 			out.push({ kind: "staff", key: `affiliation-${r.id}`, at: ms(r.at), text: `@${r.screen_name} asked to add you as an affiliate.`, url: "/account/organisation" });
 	}
@@ -93,17 +93,15 @@ async function items(viewerId: string, opts: { before?: number; after?: number; 
 	const posts = await sql`
 		select x.id, x.created_at as at, x.reason from (
 			select p.id, p.created_at, 'reply' as reason from posts p join posts parent on parent.id = p.reply_to_id
-				where p.reply_to_user_id = ${viewerId}::bigint and parent.user_id = ${viewerId}::bigint and p.user_id <> ${viewerId}::bigint and p.user_id not in ${hidden} and not ${hasMutedWord(viewerId, "notifications", sql`p.id`)}
+				where p.reply_to_user_id = ${sql.cast(viewerId, "bigint")} and parent.user_id = ${sql.cast(viewerId, "bigint")} and p.user_id <> ${sql.cast(viewerId, "bigint")} and p.user_id not in ${hidden} and not ${hasMutedWord(viewerId, "notifications", sql`p.id`)}
 			union all
 			select p.id, p.created_at, 'mention' from posts p join post_mentions m on m.post_id = p.id
-				where m.user_id = ${viewerId}::bigint and p.user_id <> ${viewerId}::bigint and p.user_id not in ${hidden} and not ${hasMutedWord(viewerId, "notifications", sql`p.id`)}
-			${
-				opts.mentionsOnly
+				where m.user_id = ${sql.cast(viewerId, "bigint")} and p.user_id <> ${sql.cast(viewerId, "bigint")} and p.user_id not in ${hidden} and not ${hasMutedWord(viewerId, "notifications", sql`p.id`)}
+			${opts.mentionsOnly
 					? sql``
 					: sql`union all
 			select p.id, p.created_at, 'quote' from posts p join posts quoted on quoted.id = p.quote_id
-				where quoted.user_id = ${viewerId}::bigint and p.user_id <> ${viewerId}::bigint and p.user_id not in ${hidden} and not ${hasMutedWord(viewerId, "notifications", sql`p.id`)}`
-			}
+				where quoted.user_id = ${sql.cast(viewerId, "bigint")} and p.user_id <> ${sql.cast(viewerId, "bigint")} and p.user_id not in ${hidden} and not ${hasMutedWord(viewerId, "notifications", sql`p.id`)}`}
 		) x where x.created_at >= ${lo} and x.created_at < ${hi}
 		order by x.created_at desc limit ${opts.limit * 2}`;
 	const seen = new Set<string>();
@@ -246,7 +244,7 @@ export async function notificationsTimeline(viewer: User, opts: { type: string; 
 		.map((i) => (i.kind === "post" ? postEntry(i, posts) : i.kind === "staff" ? staffEntry(i) : notificationEntry(i, users, posts, viewer)))
 		.filter((e) => !!e);
 
-	const [{ seen }] = await sql`select notifications_seen_at as seen from users where id = ${viewer.id}::bigint`;
+	const [{ seen }] = await sql`select notifications_seen_at as seen from users where id = ${sql.cast(viewer.id, "bigint")}`;
 	const newest = list[0]?.at ?? (c?.[1] === "t" ? Number(c[2]) : Date.now());
 	const oldest = list[list.length - 1]?.at ?? (c?.[1] === "b" ? Number(c[2]) : 0);
 	const instructions: unknown[] = [];
@@ -274,7 +272,7 @@ export async function notificationsTimeline(viewer: User, opts: { type: string; 
 
 // how many notifications arrived since the viewer last looked (or since `sinceMs`)
 export async function unreadCount(viewerId: string, sinceMs?: number): Promise<number> {
-	const [{ seen }] = await sql`select notifications_seen_at as seen from users where id = ${viewerId}::bigint`;
+	const [{ seen }] = await sql`select notifications_seen_at as seen from users where id = ${sql.cast(viewerId, "bigint")}`;
 	return (await items(viewerId, { after: Math.max(ms(seen), sinceMs ?? 0) - 1, limit: 40, mentionsOnly: false })).length;
 }
 
@@ -283,7 +281,7 @@ export async function markSeen(viewerId: string, cursorOrIndex: string | null) {
 	const m = /(\d{10,16})/.exec(cursorOrIndex ?? "");
 	// everything up to the end of that millisecond is read
 	const at = m ? new Date(Math.min(Number(m[1]) + 1, Date.now())) : new Date();
-	await sql`update users set notifications_seen_at = greatest(notifications_seen_at, ${at}) where id = ${viewerId}::bigint`;
+	await sql`update users set notifications_seen_at = ${sql.greatest(sql`notifications_seen_at`, at)} where id = ${sql.cast(viewerId, "bigint")}`;
 }
 
 // For push: what arrived after `sinceMs`, as text and an in-app path

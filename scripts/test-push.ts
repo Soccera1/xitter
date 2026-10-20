@@ -69,7 +69,7 @@ const waitFor = async (n: number, seconds = 25) => {
 
 const sub = await session(subName);
 const other = await session(otherName);
-const [{ id: subId }] = await sql`select id::text from users where screen_name = ${subName}`;
+const [{ id: subId }] = await sql`select ${sql.cast(sql`id`, "text")} as id from users where screen_name = ${subName}`;
 const device = { token: endpoint, encryption_key1: uaPublic.toString("base64url"), encryption_key2: auth.toString("base64url"), checksum: "", env: 3, locale: "en", protocol_version: 1 };
 const made: string[] = [];
 
@@ -78,7 +78,7 @@ try {
 		!!(await sub.post("/1.1/notifications/settings/login.json", { push_device_info: { ...device, token: "https://evil.example/x" } })) && !(await sql`select 1 from push_subscriptions where endpoint = 'https://evil.example/x'`).length);
 	const login = await sub.post("/1.1/notifications/settings/login.json", { push_device_info: device });
 	check("subscribing answers the settings screen", login.push_settings?.followed === "on" && login.push_settings_template?.template?.settings?.[0]?.section_entries?.length > 0, login.push_settings);
-	check("and keeps the subscription", (await sql`select 1 from push_subscriptions where endpoint = ${endpoint} and user_id = ${subId}::bigint`).length === 1);
+	check("and keeps the subscription", (await sql`select 1 from push_subscriptions where endpoint = ${endpoint} and user_id = ${sql.cast(subId, "bigint")}`).length === 1);
 	const saved = await sub.post("/1.1/notifications/settings/save.json", { push_device_info: { ...device, settings: { mentions: "off", nonsense: "on" } } });
 	check("switches are saved", saved.push_settings.mentions === "off" && !("nonsense" in saved.push_settings), saved.push_settings);
 
@@ -92,7 +92,7 @@ try {
 	check("which reads the push", /followed you$/.test(msg?.body ?? "") && msg?.url === `/${otherName}`, msg);
 
 	// a reply, with mentions switched off: nothing
-	const [post] = await sql`insert into posts (id, user_id, text, conversation_id) values (${String(BigInt(Date.now()) << 22n)}::bigint, ${subId}::bigint, 'push test', ${String(BigInt(Date.now()) << 22n)}::bigint) returning id::text`;
+	const [post] = await sql`insert into posts (id, user_id, text, conversation_id) values (${sql.cast(String(BigInt(Date.now()) << 22n), "bigint")}, ${sql.cast(subId, "bigint")}, 'push test', ${sql.cast(String(BigInt(Date.now()) << 22n), "bigint")}) returning ${sql.cast(sql`id`, "text")} as id`;
 	made.push(post.id);
 	const reply = (await other.gql("CreateTweet", { tweet_text: "a reply", reply: { in_reply_to_tweet_id: post.id } })).data.create_tweet.tweet_results.result.rest_id;
 	made.push(reply);
@@ -105,7 +105,7 @@ try {
 	check("a subscription the push service says is gone is dropped", !(await sql`select 1 from push_subscriptions where endpoint = ${endpoint}`).length);
 } finally {
 	await other.form("/1.1/friendships/destroy.json", { user_id: subId });
-	for (const id of made.reverse()) await sql`delete from posts where id = ${id}::bigint`;
+	for (const id of made.reverse()) await sql`delete from posts where id = ${sql.cast(id, "bigint")}`;
 	await sql`delete from push_subscriptions where endpoint = ${endpoint}`;
 	service.stop(true);
 }

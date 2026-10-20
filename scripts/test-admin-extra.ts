@@ -16,8 +16,8 @@ async function session(username:string){
 const created:string[]=[],names:string[]=[];let badge:string|undefined;
 try{
 	for(let i=0;i<3;i++){const name='ad'+Date.now().toString().slice(-9)+i;names.push(name);created.push(await createUser(name,name,password));}
-	await sql`update users set role='moderator' where id=${created[1]}::bigint`;
-	await sql`update users set role='support' where id=${created[2]}::bigint`;
+	await sql`update users set role='moderator' where id=${sql.cast(created[1], "bigint")}`;
+	await sql`update users set role='support' where id=${sql.cast(created[2], "bigint")}`;
 	const admin=await session('pozo'),user=await session(names[0]),moderator=await session(names[1]),support=await session(names[2]);
 	check((await user.admin('badges')).status===403,'staff only');
 	check((await moderator.admin('createBadge',{name:'Not allowed',image:'AA=='})).status===403,'only admin creates badges');
@@ -57,8 +57,8 @@ try{
 	check(sessions.length===1&&!JSON.stringify(sessions).includes(user.token),'session tokens never exposed');
 	check((await moderator.admin('setTemporaryStatus',{id:created[0],status:'restricted',hours:1})).status===200,'temporary sanction applied');
 	const blocked=await user.gql('CreateTweet',{tweet_text:'restricted check'});check(!!blocked.errors,'restriction enforced');
-	await sql`update users set status_until=now()-interval '1 second' where id=${created[0]}::bigint`;
-	await session(names[0]);const [standing]=await sql`select status,status_until from users where id=${created[0]}::bigint`;
+	await sql`update users set status_until=now()-${sql.duration(1, "second")} where id=${sql.cast(created[0], "bigint")}`;
+	await session(names[0]);const [standing]=await sql`select status,status_until from users where id=${sql.cast(created[0], "bigint")}`;
 	check(standing.status==='active'&&standing.status_until===null,'expired sanction automatically restored');
 	const post=(await user.gql('CreateTweet',{tweet_text:'Moderation visibility check'})).data.create_tweet.tweet_results.result.rest_id;
 	check((await moderator.admin('setPostVisibility',{id:post,hidden:true,sensitive:false})).status===200,'post hidden');
@@ -73,15 +73,15 @@ try{
 		check((await admin.admin('saveOperations',{...operations,maintenance:true,message:'Test maintenance'})).status===200,'maintenance on');
 		const waiting=await fetch(origin+'/home',{headers:moderator.headers});
 		check(waiting.status===200,'staff keep working during maintenance');
-		const other=await session(names[2]);await sql`update users set role=null where id=${created[2]}::bigint`;
+		const other=await session(names[2]);await sql`update users set role=null where id=${sql.cast(created[2], "bigint")}`;
 		const blockedPage=await fetch(origin+'/home',{headers:other.headers});
 		check(blockedPage.status===503&&(await blockedPage.text()).includes('Test maintenance'),'members see the maintenance page');
 	}finally{await admin.admin('saveOperations',{...operations,maintenance:false});}
 	await admin.admin('deleteBadge',{id:badge});badge=undefined;
-	const left=await sql`select 1 from user_badges where user_id=${created[0]}::bigint`;check(left.length===0,'deleting badge clears assignment');
+	const left=await sql`select 1 from user_badges where user_id=${sql.cast(created[0], "bigint")}`;check(left.length===0,'deleting badge clears assignment');
 	console.log(`all ${checks} expanded admin checks passed`);
 }finally{
-	if(badge)await sql`delete from custom_badges where id=${badge}::bigint`;
-	for(const id of created)await sql`delete from users where id=${id}::bigint`;
+	if(badge)await sql`delete from custom_badges where id=${sql.cast(badge, "bigint")}`;
+	for(const id of created)await sql`delete from users where id=${sql.cast(id, "bigint")}`;
 	await sql.close();
 }

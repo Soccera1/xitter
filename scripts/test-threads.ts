@@ -115,10 +115,10 @@ try {
 	const all = [...threads(detail), ...restThreads].map((t: any) => t.entryId);
 	check(new Set(all).size === all.length && all.length === 34, "no thread is listed twice", all.length);
 
-	await sql`insert into blocks (blocker_id, blocked_id) values (${created[2]}::bigint, ${created[3]}::bigint) on conflict do nothing`;
+	await sql`insert into blocks (blocker_id, blocked_id) values (${sql.cast(created[2], "bigint")}, ${sql.cast(created[3], "bigint")}) on conflict do nothing`;
 	detail = await c("TweetDetail", { focalTweetId: root });
 	check(!JSON.stringify(detail).includes(x2) && !threadOf(detail, r3), "blocked accounts' replies and threads disappear");
-	await sql`delete from blocks where blocker_id = ${created[2]}::bigint`;
+	await sql`delete from blocks where blocker_id = ${sql.cast(created[2], "bigint")}`;
 
 	check((await a("ModerateTweet", { tweetId: r1a })).data?.tweet_moderate_put === "Done", "the author hides a reply in the chain");
 	detail = await c("TweetDetail", { focalTweetId: root });
@@ -128,8 +128,8 @@ try {
 	console.log(`all passed (${checks})`);
 } finally {
 	if (created.length) {
-		await sql`delete from posts where user_id = any(${sql.array(created, "INT8")})`;
-		await sql`delete from users where id = any(${sql.array(created, "INT8")})`;
+		await sql`delete from posts where ${sql.contains(sql.array(created, "INT8"), sql`user_id`)}`;
+		await sql`delete from users where ${sql.contains(sql.array(created, "INT8"), sql`id`)}`;
 	}
 	await sql.end();
 }

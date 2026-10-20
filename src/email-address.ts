@@ -19,8 +19,8 @@ const randomToken = () => Buffer.from(crypto.getRandomValues(new Uint8Array(32))
 // users/email_phone_info: the client keeps this as its "devices" data
 export async function emailInfo(userId: string) {
 	const [u] = await sql`select email, email_verified,
-		(select c.email from email_confirmations c where c.user_id = u.id and not c.used and c.created_at > now() - interval '1 day' order by c.created_at desc limit 1) as pending
-		from users u where u.id = ${userId}::bigint`;
+		(select c.email from email_confirmations c where c.user_id = u.id and not c.used and c.created_at > now() - ${sql.duration(1, "day")} order by c.created_at desc limit 1) as pending
+		from users u where u.id = ${sql.cast(userId, "bigint")}`;
 	const emails = [];
 	if (u?.email) emails.push({ email: u.email, email_verified: !!u.email_verified });
 	if (u?.pending && u.pending !== u.email) emails.push({ email: u.pending, email_verified: false });
@@ -29,7 +29,7 @@ export async function emailInfo(userId: string) {
 
 async function sendConfirmation(userId: string, screenName: string, email: string) {
 	const token = randomToken();
-	await sql`insert into email_confirmations (token_hash, user_id, email) values (${hash(token)}, ${userId}::bigint, ${email})`;
+	await sql`insert into email_confirmations (token_hash, user_id, email) values (${hash(token)}, ${sql.cast(userId, "bigint")}, ${email})`;
 	const name = settings().instance_name;
 	await sendMail(
 		email,
@@ -45,7 +45,7 @@ export async function resendConfirmation(viewer: Viewer): Promise<string | null>
 	const unconfirmed = info.emails.find((e) => !e.email_verified);
 	if (!unconfirmed) return "There's no address waiting to be confirmed.";
 	if (!mailEnabled()) return "This instance can't send mail.";
-	const [recent] = await sql`select 1 from email_confirmations where user_id = ${viewer.id}::bigint and created_at > now() - interval '1 minute'`;
+	const [recent] = await sql`select 1 from email_confirmations where user_id = ${sql.cast(viewer.id, "bigint")} and created_at > now() - ${sql.duration(1, "minute")}`;
 	if (recent) return "A confirmation was just sent. Wait a minute before asking again.";
 	await sendConfirmation(viewer.id, viewer.screen_name, unconfirmed.email);
 	return null;
@@ -75,10 +75,10 @@ export async function emailRoute(req: Request, url: URL, viewer: Viewer | undefi
 	if (url.pathname === "/account/email/confirm") {
 		const token = url.searchParams.get("token") ?? "";
 		const [c] = /^[0-9a-f]{64}$/.test(token)
-			? await sql`update email_confirmations set used = true where token_hash = ${hash(token)} and not used and created_at > now() - interval '1 day' returning user_id::text, email`
+			? await sql`update email_confirmations set used = true where token_hash = ${hash(token)} and not used and created_at > now() - ${sql.duration(1, "day")} returning ${sql.cast(sql`user_id`, "text")} as user_id, email`
 			: [];
-		const done = c && (await sql`update users set email = ${c.email}, email_verified = true where id = ${c.user_id}::bigint
-			and not exists (select 1 from users o where lower(o.email) = lower(${c.email}) and o.id <> ${c.user_id}::bigint) returning id`).length;
+		const done = c && (await sql`update users set email = ${c.email}, email_verified = true where id = ${sql.cast(c.user_id, "bigint")}
+			and not exists (select 1 from users o where lower(o.email) = lower(${c.email}) and o.id <> ${sql.cast(c.user_id, "bigint")}) returning id`).length;
 		return accountPage({
 			req,
 			viewer,
@@ -91,7 +91,7 @@ export async function emailRoute(req: Request, url: URL, viewer: Viewer | undefi
 		});
 	}
 	if (!viewer) return Response.redirect("/", 302);
-	const [u] = await sql`select email, email_verified, password_hash from users where id = ${viewer.id}::bigint`;
+	const [u] = await sql`select email, email_verified, password_hash from users where id = ${sql.cast(viewer.id, "bigint")}`;
 	const current = { email: u.email as string | null, verified: !!u.email_verified };
 	if (req.method !== "POST") return emailPage(req, viewer, current);
 	const f = await req.formData().catch(() => undefined);
@@ -99,7 +99,7 @@ export async function emailRoute(req: Request, url: URL, viewer: Viewer | undefi
 	const email = String(f?.get("email") ?? "").trim().toLowerCase();
 	if (!EMAIL.test(email) || email.length > 254) return emailPage(req, viewer, current, "", "Enter a valid email address.");
 	if (!(await Bun.password.verify(String(f?.get("password") ?? ""), u.password_hash).catch(() => false))) return emailPage(req, viewer, current, "", "That password isn't right.");
-	if ((await sql`select 1 from users where lower(email) = ${email} and id <> ${viewer.id}::bigint`).length) return emailPage(req, viewer, current, "", "That email is already used by another account.");
+	if ((await sql`select 1 from users where lower(email) = ${email} and id <> ${sql.cast(viewer.id, "bigint")}`).length) return emailPage(req, viewer, current, "", "That email is already used by another account.");
 	if (!mailEnabled()) return emailPage(req, viewer, current, "", "This instance can't send mail, so it can't confirm a new address. Ask its staff.");
 	try {
 		await sendConfirmation(viewer.id, viewer.screen_name, email);
@@ -113,13 +113,13 @@ export async function emailRoute(req: Request, url: URL, viewer: Viewer | undefi
 // Five tries, fifteen minutes.
 export async function sendSignupCode(token: string, email: string) {
 	const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, "0");
-	await sql`update signup_sessions set email_code_hash = ${hash(`${token}:${code}`)}, email_code_at = now(), email_attempts = 0 where token = ${token}::uuid`;
+	await sql`update signup_sessions set email_code_hash = ${hash(`${token}:${code}`)}, email_code_at = now(), email_attempts = 0 where token = ${sql.cast(token, "uuid")}`;
 	const name = settings().instance_name;
 	await sendMail(email, `${code} is your ${name} code`, `Enter ${code} to confirm this address and finish making your ${name} account. It works for 15 minutes.\n\nIf you didn't sign up, ignore this message.`, { kind: "signup_code" });
 }
 
 export async function checkSignupCode(token: string, code: string): Promise<"ok" | "wrong" | "expired"> {
-	const [s] = await sql`update signup_sessions set email_attempts = email_attempts + 1 where token = ${token}::uuid and email_code_hash is not null
+	const [s] = await sql`update signup_sessions set email_attempts = email_attempts + 1 where token = ${sql.cast(token, "uuid")} and email_code_hash is not null
 		returning email_code_hash, email_code_at, email_attempts`;
 	if (!s || s.email_attempts > 5 || new Date(s.email_code_at).getTime() < Date.now() - 15 * 60_000) return "expired";
 	return s.email_code_hash === hash(`${token}:${code.replace(/\D/g, "")}`) ? "ok" : "wrong";

@@ -40,7 +40,7 @@ export const vapidPublicKey = keys.publicKey;
 
 // RFC 8291: one aes128gcm record for the subscriber's keys
 // (`fixed`: the sender key and salt, only for the RFC's worked example in scripts/test-push-crypto.ts)
-export function encryptPayload(payload: Buffer, p256dh: Buffer, auth: Buffer, fixed?: { privateKey: Buffer; salt: Buffer }): Buffer {
+export function encryptPayload(payload: Buffer, p256dh: Buffer, auth: Buffer, fixed?: { privateKey: Buffer; salt: Buffer }): Buffer<ArrayBuffer> {
 	const ecdh = createECDH("prime256v1");
 	if (fixed) ecdh.setPrivateKey(fixed.privateKey);
 	const asPublic = fixed ? ecdh.getPublicKey() : ecdh.generateKeys();
@@ -87,7 +87,7 @@ export async function pushTo(sub: Pick<Subscription, "id" | "endpoint" | "p256dh
 		body,
 		signal: AbortSignal.timeout(10_000),
 	}).catch(() => undefined);
-	if (r && (r.status === 404 || r.status === 410)) await sql`delete from push_subscriptions where id = ${sub.id}::bigint`;
+	if (r && (r.status === 404 || r.status === 410)) await sql`delete from push_subscriptions where id = ${sql.cast(sub.id, "bigint")}`;
 	return !!r?.ok;
 }
 
@@ -148,20 +148,20 @@ export async function pushSettingsRoute(viewerId: string, action: string, body: 
 	const d = deviceInfo(body);
 	const endpoint = typeof d.token === "string" && pushService(d.token) ? d.token : null;
 	if (action === "logout") {
-		if (endpoint) await sql`delete from push_subscriptions where user_id = ${viewerId}::bigint and endpoint = ${endpoint}`;
+		if (endpoint) await sql`delete from push_subscriptions where user_id = ${sql.cast(viewerId, "bigint")} and endpoint = ${endpoint}`;
 		return Response.json({});
 	}
 	const keysFit = [d.encryption_key1, d.encryption_key2].every((k) => typeof k === "string" && k.length <= 256) && (endpoint?.length ?? 0) <= 2048;
-	const [subs] = await sql`select count(*)::int as n from push_subscriptions where user_id = ${viewerId}::bigint`;
+	const [subs] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from push_subscriptions where user_id = ${sql.cast(viewerId, "bigint")}`;
 	if (action === "login" && endpoint && keysFit && subs.n < 50 && d.encryption_key1 && d.encryption_key2) {
-		await sql`insert into push_subscriptions (id, user_id, endpoint, p256dh, auth) values (${newId()}::bigint, ${viewerId}::bigint, ${endpoint}, ${d.encryption_key1}, ${d.encryption_key2})
+		await sql`insert into push_subscriptions (id, user_id, endpoint, p256dh, auth) values (${sql.cast(newId(), "bigint")}, ${sql.cast(viewerId, "bigint")}, ${endpoint}, ${d.encryption_key1}, ${d.encryption_key2})
 			on conflict (endpoint) do update set user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`;
 	}
 	if (action === "save" && endpoint)
-		await sql`update push_subscriptions set settings = settings || ${JSON.stringify(cleanSettings(d.settings as Record<string, unknown>))}::text::jsonb
-			where user_id = ${viewerId}::bigint and endpoint = ${endpoint}`;
+		await sql`update push_subscriptions set settings = ${sql.jsonMerge(sql`settings`, sql.cast(JSON.stringify(cleanSettings(d.settings as Record<string, unknown>)), "jsonb"))}
+			where user_id = ${sql.cast(viewerId, "bigint")} and endpoint = ${endpoint}`;
 	if (!["login", "checkin", "save"].includes(action)) return undefined;
-	const [sub] = endpoint ? await sql`select settings from push_subscriptions where user_id = ${viewerId}::bigint and endpoint = ${endpoint}` : [];
+	const [sub] = endpoint ? await sql`select settings from push_subscriptions where user_id = ${sql.cast(viewerId, "bigint")} and endpoint = ${endpoint}` : [];
 	return Response.json(settingsReply(sub?.settings ?? {}));
 }
 
@@ -175,7 +175,7 @@ export async function pushDue(): Promise<number> {
 	if (pushing) return 0;
 	pushing = true;
 	try {
-		const subs = (await sql`select id::text, user_id::text, endpoint, p256dh, auth, settings, last_pushed_at from push_subscriptions`) as Subscription[];
+		const subs = (await sql`select ${sql.cast(sql`id`, "text")} as id, ${sql.cast(sql`user_id`, "text")} as user_id, endpoint, p256dh, auth, settings, last_pushed_at from push_subscriptions`) as Subscription[];
 		let sent = 0;
 		// an account's notifications are worked out once for all its browsers,
 		// from the one pushed to longest ago (items newest first, so each
@@ -189,7 +189,7 @@ export async function pushDue(): Promise<number> {
 				const messages = on("direct_messages") ? await newMessages(sub.user_id, sub.last_pushed_at) : [];
 				const all = [...items, ...messages].sort((a, b) => a.at - b.at);
 				if (!all.length) continue;
-				await sql`update push_subscriptions set last_pushed_at = ${new Date(Math.max(...all.map((i) => i.at)) + 1)} where id = ${sub.id}::bigint`;
+				await sql`update push_subscriptions set last_pushed_at = ${new Date(Math.max(...all.map((i) => i.at)) + 1)} where id = ${sql.cast(sub.id, "bigint")}`;
 				const name = settings().instance_name;
 				const out = all.length > BURST ? [{ title: name, body: `${all.length} new notifications`, url: "/notifications", tag: "summary" }] : all.map((i) => ({ title: name, body: i.text, url: i.url, tag: i.key }));
 				for (const m of out) if (await pushTo(sub, m)) sent++;
@@ -203,11 +203,11 @@ export async function pushDue(): Promise<number> {
 
 // who wrote since `after` (chat is end-to-end encrypted: never what)
 async function newMessages(userId: string, after: Date): Promise<(PushItem & { kind: "staff" })[]> {
-	const rows = await sql`select e.seq::text, s.screen_name, s.name, e.created_at from chat_events e
-		join chat_members m on m.conversation_id = e.conversation_id and m.user_id = ${userId}::bigint and m.accepted and not m.muted
+	const rows = await sql`select ${sql.cast(sql`e.seq`, "text")} as seq, s.screen_name, s.name, e.created_at from chat_events e
+		join chat_members m on m.conversation_id = e.conversation_id and m.user_id = ${sql.cast(userId, "bigint")} and m.accepted and not m.muted
 		join users s on s.id = e.sender_id
-		where e.kind = 1 and e.sender_id <> ${userId}::bigint and e.created_at > ${after}
-			and not exists (select 1 from blocks b where b.blocker_id = ${userId}::bigint and b.blocked_id = e.sender_id)
+		where e.kind = 1 and e.sender_id <> ${sql.cast(userId, "bigint")} and e.created_at > ${after}
+			and not exists (select 1 from blocks b where b.blocker_id = ${sql.cast(userId, "bigint")} and b.blocked_id = e.sender_id)
 		order by e.created_at limit 20`;
 	return rows.map((r: any) => ({ kind: "staff" as const, key: `dm-${r.seq}`, at: new Date(r.created_at).getTime(), text: `${r.name || r.screen_name} sent you a message`, url: "/i/chat" }));
 }

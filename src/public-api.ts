@@ -32,10 +32,10 @@ class ApiError extends Error {
 // ---- tokens
 
 export async function createToken(userId: string, name: string, scope: "read" | "write") {
-	const [{ n }] = await sql`select count(*)::int as n from api_tokens where user_id = ${userId}::bigint`;
+	const [{ n }] = await sql`select ${sql.cast(sql`count(*)`, "int")} as n from api_tokens where user_id = ${sql.cast(userId, "bigint")}`;
 	if (n >= MAX_TOKENS) throw new ApiError(400, `You can have up to ${MAX_TOKENS} tokens. Delete one first.`);
 	const token = `xit_${Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("hex")}`;
-	await sql`insert into api_tokens (id, user_id, name, token_hash, scope) values (${newId()}::bigint, ${userId}::bigint, ${name}, ${hash(token)}, ${scope})`;
+	await sql`insert into api_tokens (id, user_id, name, token_hash, scope) values (${sql.cast(newId(), "bigint")}, ${sql.cast(userId, "bigint")}, ${name}, ${hash(token)}, ${scope})`;
 	return token;
 }
 
@@ -43,12 +43,12 @@ async function tokenViewer(req: Request): Promise<{ viewer: Viewer; scope: strin
 	const token = /^Bearer\s+(xit_[0-9a-f]{48})$/i.exec(req.headers.get("authorization") ?? "")?.[1];
 	if (!token) return undefined;
 	const [row] = await sql`
-		select u.id::text, u.screen_name, u.name, u.bio, u.location, u.website, u.avatar_url, u.banner_url, u.verified_type, u.flag, u.status, u.role, u.protected, u.language, u.created_at,
-			t.scope, t.id::text as token_id, t.last_used_at
+		select ${sql.cast(sql`u.id`, "text")} as id, u.screen_name, u.name, u.bio, u.location, u.website, u.avatar_url, u.banner_url, u.verified_type, u.flag, u.status, u.role, u.protected, u.language, u.created_at,
+			t.scope, ${sql.cast(sql`t.id`, "text")} as token_id, t.last_used_at
 		from api_tokens t join users u on u.id = t.user_id
 		where t.token_hash = ${hash(token)} and u.status <> 'suspended' and u.deactivated_at is null`;
 	if (!row) return undefined;
-	if (!row.last_used_at || Date.now() - row.last_used_at.getTime() > 60_000) await sql`update api_tokens set last_used_at = now() where id = ${row.token_id}::bigint`;
+	if (!row.last_used_at || Date.now() - row.last_used_at.getTime() > 60_000) await sql`update api_tokens set last_used_at = now() where id = ${sql.cast(row.token_id, "bigint")}`;
 	const { scope, token_id: _id, last_used_at: _used, ...user } = row;
 	// staff tokens are limited like anyone's: the exemption is for the panel
 	return { viewer: { ...user, role: null, csrf: "", token: "", postSource: "Xitter API" } as Viewer, scope };
@@ -336,7 +336,7 @@ function withCors(res: Response) {
 // ---- /account/api: the account's tokens
 
 async function tokensView(req: Request, v: Viewer, fresh = "", error = "") {
-	const tokens = await sql`select id::text, name, scope, created_at, last_used_at from api_tokens where user_id = ${v.id}::bigint order by created_at desc`;
+	const tokens = await sql`select ${sql.cast(sql`id`, "text")} as id, name, scope, created_at, last_used_at from api_tokens where user_id = ${sql.cast(v.id, "bigint")} order by created_at desc`;
 	const when = (d: Date | null) => (d ? new Date(d).toUTCString().replace(/:\d\d GMT$/, " UTC") : "never");
 	return accountPage({
 		req,
@@ -368,7 +368,7 @@ export async function apiTokensRoute(req: Request, v: Viewer): Promise<Response>
 	const f = await req.formData().catch(() => new FormData());
 	if (f.get("do") === "delete") {
 		const id = String(f.get("id") ?? "");
-		if (isId(id)) await sql`delete from api_tokens where id = ${id}::bigint and user_id = ${v.id}::bigint`;
+		if (isId(id)) await sql`delete from api_tokens where id = ${sql.cast(id, "bigint")} and user_id = ${sql.cast(v.id, "bigint")}`;
 		return tokensView(req, v);
 	}
 	const name = String(f.get("name") ?? "").trim();

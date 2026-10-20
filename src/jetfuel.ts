@@ -273,7 +273,7 @@ export function decode(bytes: Uint8Array): Message[] {
 	return out;
 }
 
-export function encode(messages: Message[]): Uint8Array {
+export function encode(messages: Message[]): Uint8Array<ArrayBuffer> {
 	const frames: number[] = [];
 	for (const m of messages) {
 		const w = new Writer();
