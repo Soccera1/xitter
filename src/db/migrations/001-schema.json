@@ -1,0 +1,3937 @@
+{
+	"tables": {
+		"users": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"screen_name": {
+					"type": "text",
+					"notNull": true
+				},
+				"name": {
+					"type": "text",
+					"notNull": true
+				},
+				"password_hash": {
+					"type": "text",
+					"notNull": true
+				},
+				"bio": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"location": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"avatar_url": {
+					"type": "text"
+				},
+				"banner_url": {
+					"type": "text"
+				},
+				"verified_type": {
+					"type": "text",
+					"check": "verified_type in ('blue', 'business', 'government', 'government_individual')"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"education_flags": {
+					"type": "json",
+					"notNull": true,
+					"default": "'{}'"
+				},
+				"preferences": {
+					"type": "json",
+					"notNull": true,
+					"default": "'{}'"
+				},
+				"country": {
+					"type": "text"
+				},
+				"status_until": {
+					"type": "timestamp"
+				},
+				"deactivated_at": {
+					"type": "timestamp"
+				},
+				"language": {
+					"type": "text",
+					"notNull": true,
+					"default": "'en'"
+				},
+				"email": {
+					"type": "text"
+				},
+				"totp_enabled": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"totp_secret": {
+					"type": "text"
+				},
+				"totp_pending": {
+					"type": "text"
+				},
+				"totp_backup": {
+					"type": "json",
+					"notNull": true,
+					"default": "'[]'"
+				},
+				"email_settings": {
+					"type": "json",
+					"notNull": true,
+					"default": "'{}'"
+				},
+				"status_restore": {
+					"type": "text"
+				},
+				"notes_writer": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"notes_alias": {
+					"type": "text",
+					"notNull": true,
+					"default": {
+						"postgres": "'Contributor-' || substr(replace(cast(gen_random_uuid() as text), '-', ''), 1, 12)",
+						"sqlite": "'Contributor-' || substr(replace(gen_random_uuid(), '-', ''), 1, 12)"
+					}
+				},
+				"website": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"pinned_post_id": {
+					"type": "bigint",
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"notifications_seen_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"invite_code": {
+					"type": "text",
+					"references": {
+						"table": "invites",
+						"column": "code",
+						"onDelete": "set null"
+					}
+				},
+				"flag": {
+					"type": "text"
+				},
+				"role": {
+					"type": "text",
+					"check": "role in ('admin', 'moderator', 'support')"
+				},
+				"status": {
+					"type": "text",
+					"notNull": true,
+					"check": "status in ('active', 'restricted', 'limited', 'suspended')",
+					"default": "'active'"
+				},
+				"last_seen_at": {
+					"type": "timestamp"
+				},
+				"verified_at": {
+					"type": "timestamp"
+				},
+				"org_badge_id": {
+					"type": "bigint",
+					"references": {
+						"table": "custom_badges",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"protected": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"signup_source": {
+					"type": "text"
+				},
+				"signup_country": {
+					"type": "text"
+				},
+				"based_in_override": {
+					"type": "text"
+				},
+				"activity_mailed_at": {
+					"type": "timestamp"
+				},
+				"messages_mailed_at": {
+					"type": "timestamp"
+				},
+				"activity_checked_at": {
+					"type": "timestamp"
+				},
+				"messages_checked_at": {
+					"type": "timestamp"
+				},
+				"translator": {
+					"type": "text",
+					"check": "translator in ('translator', 'moderator', 'approver')"
+				},
+				"email_verified": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"count_overrides": {
+					"type": "json"
+				},
+				"delegation_invites": {
+					"type": "text",
+					"notNull": true,
+					"check": "delegation_invites in ('Nobody', 'Everyone', 'OnlyFollowing')",
+					"default": "'Everyone'"
+				},
+				"automated_by": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"parody_label": {
+					"type": "text",
+					"notNull": true,
+					"check": "parody_label in ('None', 'Parody', 'Commentary', 'Fan')",
+					"default": "'None'"
+				},
+				"parody_label_at": {
+					"type": "timestamp"
+				},
+				"label_id": {
+					"type": "bigint",
+					"references": {
+						"table": "account_labels",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"role_granted_by": {
+					"type": "bigint"
+				}
+			}
+		},
+		"sessions": {
+			"columns": {
+				"token": {
+					"type": "text",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"csrf": {
+					"type": "text",
+					"notNull": true
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"id": {
+					"type": "uuid",
+					"notNull": true,
+					"default": "gen_random_uuid()"
+				},
+				"last_seen_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"user_agent": {
+					"type": "text"
+				},
+				"ip": {
+					"type": "text"
+				}
+			}
+		},
+		"posts": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"text": {
+					"type": "text",
+					"notNull": true
+				},
+				"reply_to_id": {
+					"type": "bigint"
+				},
+				"conversation_id": {
+					"type": "bigint",
+					"notNull": true
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"reply_to_user_id": {
+					"type": "bigint"
+				},
+				"reply_policy": {
+					"type": "text"
+				},
+				"hidden": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"sensitive": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"source": {
+					"type": "text",
+					"notNull": true,
+					"default": "'Xitter for Web'"
+				},
+				"quote_id": {
+					"type": "bigint",
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"article_id": {
+					"type": "bigint",
+					"references": {
+						"table": "articles",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"community_id": {
+					"type": "bigint",
+					"references": {
+						"table": "communities",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"poll_id": {
+					"type": "bigint",
+					"references": {
+						"table": "polls",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"place_id": {
+					"type": "text"
+				},
+				"edit_count": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"edited_at": {
+					"type": "timestamp"
+				},
+				"pinned_reply_id": {
+					"type": "bigint",
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"notice": {
+					"type": "json"
+				},
+				"count_overrides": {
+					"type": "json"
+				},
+				"reply_hidden_at": {
+					"type": "timestamp"
+				}
+			}
+		},
+		"custom_badges": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"name": {
+					"type": "text",
+					"notNull": true,
+					"check": "length(name) between 1 and 60"
+				},
+				"image": {
+					"type": "bytes",
+					"notNull": true
+				},
+				"mime": {
+					"type": "text",
+					"notNull": true
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"user_badges": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"badge_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "custom_badges",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"position": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"badge_id"
+			]
+		},
+		"login_challenges": {
+			"columns": {
+				"token": {
+					"type": "uuid",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"attempts": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"post_views": {
+			"columns": {
+				"post_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"post_id",
+				"user_id"
+			]
+		},
+		"password_resets": {
+			"columns": {
+				"token_hash": {
+					"type": "text",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"used": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"data_exports": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"body": {
+					"type": "json",
+					"notNull": true
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"staff_notes": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"actor_id": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"body": {
+					"type": "text",
+					"notNull": true,
+					"check": "length(body) between 1 and 2000"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"staff_messages": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"actor_id": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"kind": {
+					"type": "text",
+					"notNull": true,
+					"check": "kind in ('message','warning','strike')"
+				},
+				"body": {
+					"type": "text",
+					"notNull": true,
+					"check": "length(body) between 1 and 2000"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"read_at": {
+					"type": "timestamp"
+				},
+				"revoked_at": {
+					"type": "timestamp"
+				}
+			}
+		},
+		"moderation_appeals": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"message_id": {
+					"type": "bigint",
+					"references": {
+						"table": "staff_messages",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"body": {
+					"type": "text",
+					"notNull": true
+				},
+				"status": {
+					"type": "text",
+					"notNull": true,
+					"check": "status in ('open','accepted','rejected')",
+					"default": "'open'"
+				},
+				"staff_reply": {
+					"type": "text"
+				},
+				"reviewer_id": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"resolved_at": {
+					"type": "timestamp"
+				}
+			}
+		},
+		"client_platforms": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"label": {
+					"type": "text",
+					"notNull": true,
+					"check": "length(label) between 1 and 80"
+				},
+				"token_hash": {
+					"type": "text",
+					"notNull": true,
+					"unique": true
+				},
+				"creator_id": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"revoked": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"community_notes": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"post_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"author_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"text": {
+					"type": "text",
+					"notNull": true,
+					"check": "length(text) between 1 and 500"
+				},
+				"classification": {
+					"type": "text",
+					"notNull": true,
+					"check": "classification in ('Misleading', 'NotMisleading')"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"data_v1": {
+					"type": "json",
+					"notNull": true,
+					"default": "'{}'"
+				}
+			},
+			"unique": [
+				[
+					"post_id",
+					"author_id"
+				]
+			]
+		},
+		"community_note_ratings": {
+			"columns": {
+				"note_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "community_notes",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"rating": {
+					"type": "text",
+					"notNull": true,
+					"check": "rating in ('Helpful', 'SomewhatHelpful', 'NotHelpful')"
+				},
+				"data_v2": {
+					"type": "json",
+					"notNull": true,
+					"default": "'{}'"
+				}
+			},
+			"primaryKey": [
+				"note_id",
+				"user_id"
+			]
+		},
+		"community_note_requests": {
+			"columns": {
+				"post_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"source_link": {
+					"type": "text"
+				},
+				"suggestion": {
+					"type": "text"
+				}
+			},
+			"primaryKey": [
+				"post_id",
+				"user_id"
+			]
+		},
+		"likes": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"post_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"post_id"
+			]
+		},
+		"reposts": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"post_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"post_id"
+			]
+		},
+		"bookmarks": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"post_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"post_id"
+			]
+		},
+		"highlights": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"post_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"post_id"
+			]
+		},
+		"follows": {
+			"columns": {
+				"follower_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"followee_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"follower_id",
+				"followee_id"
+			],
+			"checks": [
+				"follower_id <> followee_id"
+			]
+		},
+		"media": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"kind": {
+					"type": "text",
+					"notNull": true
+				},
+				"mime": {
+					"type": "text",
+					"notNull": true
+				},
+				"size": {
+					"type": "integer",
+					"notNull": true
+				},
+				"width": {
+					"type": "integer",
+					"notNull": true
+				},
+				"height": {
+					"type": "integer",
+					"notNull": true
+				},
+				"post_id": {
+					"type": "bigint",
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"position": {
+					"type": "smallint"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"duration_ms": {
+					"type": "integer"
+				},
+				"state": {
+					"type": "text",
+					"notNull": true,
+					"default": "'ready'"
+				},
+				"alt_text": {
+					"type": "text"
+				},
+				"sensitive_warning": {
+					"type": "text[]"
+				}
+			}
+		},
+		"articles": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"title": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"content_state": {
+					"type": "json"
+				},
+				"plain_text": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"cover_media_id": {
+					"type": "bigint",
+					"references": {
+						"table": "media",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"state": {
+					"type": "text",
+					"notNull": true,
+					"default": "'Draft'"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"modified_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"first_published_at": {
+					"type": "timestamp"
+				},
+				"hidden": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				}
+			}
+		},
+		"post_mentions": {
+			"columns": {
+				"post_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				}
+			},
+			"primaryKey": [
+				"post_id",
+				"user_id"
+			]
+		},
+		"blocks": {
+			"columns": {
+				"blocker_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"blocked_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"blocker_id",
+				"blocked_id"
+			]
+		},
+		"mutes": {
+			"columns": {
+				"muter_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"muted_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"muter_id",
+				"muted_id"
+			]
+		},
+		"muted_keywords": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"keyword": {
+					"type": "text",
+					"notNull": true
+				},
+				"surfaces": {
+					"type": "text[]",
+					"notNull": true
+				},
+				"exclude_following": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"valid_until": {
+					"type": "timestamp"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"invites": {
+			"columns": {
+				"code": {
+					"type": "text",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"created_by": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"max_uses": {
+					"type": "integer",
+					"notNull": true,
+					"default": "1"
+				},
+				"uses": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"expires_at": {
+					"type": "timestamp"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"org_id": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"revoked": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				}
+			}
+		},
+		"audit_log": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"actor_id": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"action": {
+					"type": "text",
+					"notNull": true
+				},
+				"target": {
+					"type": "text"
+				},
+				"detail": {
+					"type": "json"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"affiliations": {
+			"columns": {
+				"org_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"manager": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				}
+			},
+			"primaryKey": [
+				"org_id",
+				"user_id"
+			]
+		},
+		"settings": {
+			"columns": {
+				"key": {
+					"type": "text",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"value": {
+					"type": "json",
+					"notNull": true
+				}
+			}
+		},
+		"reports": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"reporter_id": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"post_id": {
+					"type": "bigint",
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"reason": {
+					"type": "text",
+					"notNull": true
+				},
+				"details": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"status": {
+					"type": "text",
+					"notNull": true,
+					"default": "'open'"
+				},
+				"handled_by": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"handled_at": {
+					"type": "timestamp"
+				},
+				"note": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"schema_steps": {
+			"columns": {
+				"name": {
+					"type": "text",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"done_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"username_changes": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"old_name": {
+					"type": "text",
+					"notNull": true
+				},
+				"new_name": {
+					"type": "text",
+					"notNull": true
+				},
+				"changed_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"signup_sessions": {
+			"columns": {
+				"token": {
+					"type": "uuid",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"username": {
+					"type": "text",
+					"notNull": true
+				},
+				"code": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"pending": {
+					"type": "json"
+				},
+				"email_code_hash": {
+					"type": "text"
+				},
+				"email_code_at": {
+					"type": "timestamp"
+				},
+				"email_attempts": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				}
+			}
+		},
+		"chat_keys": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"version": {
+					"type": "bigint",
+					"notNull": true
+				},
+				"public_key": {
+					"type": "text",
+					"notNull": true
+				},
+				"signing_public_key": {
+					"type": "text",
+					"notNull": true
+				},
+				"identity_public_key_signature": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"registration_method": {
+					"type": "text",
+					"notNull": true,
+					"default": "'CustomPin'"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"version"
+			]
+		},
+		"chat_members": {
+			"columns": {
+				"conversation_id": {
+					"type": "text",
+					"notNull": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"joined_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"accepted": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "true"
+				},
+				"archived": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"muted": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"deleted_before": {
+					"type": "bigint",
+					"notNull": true,
+					"default": "0"
+				}
+			},
+			"primaryKey": [
+				"conversation_id",
+				"user_id"
+			]
+		},
+		"chat_events": {
+			"columns": {
+				"seq": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"conversation_id": {
+					"type": "text",
+					"notNull": true
+				},
+				"sender_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"kind": {
+					"type": "smallint",
+					"notNull": true
+				},
+				"event": {
+					"type": "bytes",
+					"notNull": true
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"audience_id": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"deleted": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				}
+			}
+		},
+		"chat_conversations": {
+			"columns": {
+				"id": {
+					"type": "text",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"creator_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"metadata": {
+					"type": "json",
+					"notNull": true,
+					"default": "'{}'"
+				},
+				"created": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				}
+			}
+		},
+		"chat_trust": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"trusted_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"trusted_id"
+			]
+		},
+		"chat_hidden_events": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"seq": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "chat_events",
+						"column": "seq",
+						"onDelete": "cascade"
+					}
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"seq"
+			]
+		},
+		"chat_uploads": {
+			"columns": {
+				"hash": {
+					"type": "text",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"resume_id": {
+					"type": "bigint",
+					"notNull": true,
+					"unique": true
+				},
+				"conversation_id": {
+					"type": "text",
+					"notNull": true
+				},
+				"message_id": {
+					"type": "text",
+					"notNull": true
+				},
+				"uploader_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"total_bytes": {
+					"type": "bigint",
+					"notNull": true,
+					"check": "total_bytes > 0"
+				},
+				"ready": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"expires_at": {
+					"type": "timestamp"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"lists": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"owner_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"name": {
+					"type": "text",
+					"notNull": true
+				},
+				"description": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"is_private": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"banner_media_id": {
+					"type": "bigint"
+				}
+			}
+		},
+		"list_members": {
+			"columns": {
+				"list_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "lists",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"list_id",
+				"user_id"
+			]
+		},
+		"list_subscribers": {
+			"columns": {
+				"list_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "lists",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"list_id",
+				"user_id"
+			]
+		},
+		"list_mutes": {
+			"columns": {
+				"list_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "lists",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				}
+			},
+			"primaryKey": [
+				"list_id",
+				"user_id"
+			]
+		},
+		"pinned_lists": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"list_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "lists",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"position": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"list_id"
+			]
+		},
+		"communities": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"creator_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"name": {
+					"type": "text",
+					"notNull": true
+				},
+				"description": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"question": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"join_policy": {
+					"type": "text",
+					"notNull": true,
+					"default": "'Open'"
+				},
+				"invites_policy": {
+					"type": "text",
+					"notNull": true,
+					"default": "'MemberInvitesAllowed'"
+				},
+				"is_nsfw": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"banner_url": {
+					"type": "text"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"banner_width": {
+					"type": "integer"
+				},
+				"banner_height": {
+					"type": "integer"
+				},
+				"topic_id": {
+					"type": "bigint",
+					"references": {
+						"table": "topics",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				}
+			}
+		},
+		"community_members": {
+			"columns": {
+				"community_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "communities",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"role": {
+					"type": "text",
+					"notNull": true,
+					"check": "role in ('Member', 'Moderator', 'Admin')",
+					"default": "'Member'"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"community_id",
+				"user_id"
+			]
+		},
+		"community_rules": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"community_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "communities",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"name": {
+					"type": "text",
+					"notNull": true
+				},
+				"description": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"position": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				}
+			}
+		},
+		"community_join_requests": {
+			"columns": {
+				"community_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "communities",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"answer": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"community_id",
+				"user_id"
+			]
+		},
+		"polls": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"choices": {
+					"type": "text[]",
+					"notNull": true
+				},
+				"duration_minutes": {
+					"type": "integer",
+					"notNull": true
+				},
+				"ends_at": {
+					"type": "timestamp"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"choice_media": {
+					"type": "bigint[]"
+				}
+			}
+		},
+		"poll_votes": {
+			"columns": {
+				"poll_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "polls",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"choice": {
+					"type": "smallint",
+					"notNull": true
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"poll_id",
+				"user_id"
+			]
+		},
+		"scheduled_posts": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"kind": {
+					"type": "text",
+					"notNull": true,
+					"check": "kind in ('scheduled', 'draft')"
+				},
+				"execute_at": {
+					"type": "timestamp"
+				},
+				"request": {
+					"type": "json",
+					"notNull": true
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"post_versions": {
+			"columns": {
+				"version_id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"post_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"seq": {
+					"type": "integer",
+					"notNull": true
+				},
+				"text": {
+					"type": "text",
+					"notNull": true
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true
+				}
+			}
+		},
+		"follow_requests": {
+			"columns": {
+				"requester_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"target_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"requester_id",
+				"target_id"
+			],
+			"checks": [
+				"requester_id <> target_id"
+			]
+		},
+		"bookmark_folders": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"name": {
+					"type": "text",
+					"notNull": true
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"bookmark_folder_posts": {
+			"columns": {
+				"folder_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "bookmark_folders",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"post_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "posts",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"folder_id",
+				"post_id"
+			]
+		},
+		"topics": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"name": {
+					"type": "text",
+					"notNull": true,
+					"check": "length(name) between 1 and 50"
+				},
+				"description": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"keywords": {
+					"type": "text[]",
+					"notNull": true
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"topic_follows": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"topic_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "topics",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"topic_id"
+			]
+		},
+		"topic_not_interested": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"topic_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "topics",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"topic_id"
+			]
+		},
+		"post_notifications": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"target_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"target_id"
+			]
+		},
+		"repost_mutes": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"target_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"user_id",
+				"target_id"
+			]
+		},
+		"contacts": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"vcard": {
+					"type": "text",
+					"notNull": true
+				},
+				"emails": {
+					"type": "text[]",
+					"notNull": true,
+					"default": {
+						"postgres": "'{}'",
+						"sqlite": "'[]'"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"explore_cards": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"kind": {
+					"type": "text",
+					"notNull": true,
+					"check": "kind in ('news', 'sports')"
+				},
+				"title": {
+					"type": "text",
+					"notNull": true
+				},
+				"summary": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"category": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"query": {
+					"type": "text",
+					"notNull": true
+				},
+				"image": {
+					"type": "bytes"
+				},
+				"image_mime": {
+					"type": "text"
+				},
+				"image_width": {
+					"type": "integer"
+				},
+				"image_height": {
+					"type": "integer"
+				},
+				"home": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"away": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"home_score": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"away_score": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"state": {
+					"type": "text",
+					"check": "state in ('Scheduled', 'InProgress', 'Completed', 'Postponed', 'Cancelled')"
+				},
+				"clock": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"starts_at": {
+					"type": "timestamp"
+				},
+				"ends_at": {
+					"type": "timestamp"
+				},
+				"hidden": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"position": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"login_events": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"ip": {
+					"type": "text"
+				},
+				"country": {
+					"type": "text"
+				},
+				"app": {
+					"type": "text",
+					"notNull": true
+				},
+				"user_agent": {
+					"type": "text"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"mail_log": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"to_addr": {
+					"type": "text",
+					"notNull": true
+				},
+				"kind": {
+					"type": "text",
+					"notNull": true
+				},
+				"subject": {
+					"type": "text",
+					"notNull": true
+				},
+				"status": {
+					"type": "text",
+					"notNull": true,
+					"check": "status in ('sent', 'failed', 'skipped')"
+				},
+				"error": {
+					"type": "text"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"push_subscriptions": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"endpoint": {
+					"type": "text",
+					"notNull": true,
+					"unique": true
+				},
+				"p256dh": {
+					"type": "text",
+					"notNull": true
+				},
+				"auth": {
+					"type": "text",
+					"notNull": true
+				},
+				"settings": {
+					"type": "json",
+					"notNull": true,
+					"default": "'{}'"
+				},
+				"last_pushed_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"email_confirmations": {
+			"columns": {
+				"token_hash": {
+					"type": "text",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"email": {
+					"type": "text",
+					"notNull": true
+				},
+				"used": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"error_log": {
+			"columns": {
+				"fingerprint": {
+					"type": "text",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"source": {
+					"type": "text",
+					"notNull": true,
+					"check": "source in ('server', 'client', 'job')"
+				},
+				"message": {
+					"type": "text",
+					"notNull": true
+				},
+				"stack": {
+					"type": "text"
+				},
+				"path": {
+					"type": "text"
+				},
+				"user_id": {
+					"type": "bigint"
+				},
+				"count": {
+					"type": "integer",
+					"notNull": true,
+					"default": "1"
+				},
+				"first_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"last_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"resolved": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				}
+			}
+		},
+		"affiliation_requests": {
+			"columns": {
+				"org_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"requested_by": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"org_id",
+				"user_id"
+			]
+		},
+		"unfollows": {
+			"columns": {
+				"follower_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"followee_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"profile_visits": {
+			"columns": {
+				"profile_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"visitor_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"day": {
+					"type": "date",
+					"notNull": true,
+					"default": "current_date"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"profile_id",
+				"visitor_id",
+				"day"
+			]
+		},
+		"sticker_packs": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"name": {
+					"type": "text",
+					"notNull": true,
+					"check": "length(name) between 1 and 40"
+				},
+				"position": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"stickers": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"pack_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "sticker_packs",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"name": {
+					"type": "text",
+					"notNull": true,
+					"check": "length(name) <= 40",
+					"default": "''"
+				},
+				"image": {
+					"type": "bytes",
+					"notNull": true
+				},
+				"mime": {
+					"type": "text",
+					"notNull": true
+				},
+				"position": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"api_tokens": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"name": {
+					"type": "text",
+					"notNull": true,
+					"check": "length(name) between 1 and 40"
+				},
+				"token_hash": {
+					"type": "text",
+					"notNull": true,
+					"unique": true
+				},
+				"scope": {
+					"type": "text",
+					"notNull": true,
+					"check": "scope in ('read', 'write')"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				},
+				"last_used_at": {
+					"type": "timestamp"
+				}
+			}
+		},
+		"hashflags": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"hashtag": {
+					"type": "text",
+					"notNull": true
+				},
+				"starts_at": {
+					"type": "timestamp",
+					"notNull": true
+				},
+				"ends_at": {
+					"type": "timestamp",
+					"notNull": true
+				},
+				"like_animation": {
+					"type": "text"
+				},
+				"emoji": {
+					"type": "bytes"
+				},
+				"emoji_mime": {
+					"type": "text"
+				},
+				"hashfetti": {
+					"type": "boolean",
+					"notNull": true,
+					"default": "false"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"checks": [
+				"ends_at > starts_at",
+				"like_animation is not null or emoji is not null"
+			]
+		},
+		"delegation_members": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"owner_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"member_id": {
+					"type": "bigint",
+					"notNull": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"role": {
+					"type": "text",
+					"notNull": true,
+					"check": "role in ('Admin', 'Contributor')"
+				},
+				"status": {
+					"type": "text",
+					"notNull": true,
+					"check": "status in ('Pending', 'Accepted')",
+					"default": "'Pending'"
+				},
+				"invited_by": {
+					"type": "bigint",
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"unique": [
+				[
+					"owner_id",
+					"member_id"
+				]
+			],
+			"checks": [
+				"owner_id <> member_id"
+			]
+		},
+		"link_previews": {
+			"columns": {
+				"url": {
+					"type": "text",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"ok": {
+					"type": "boolean",
+					"notNull": true
+				},
+				"title": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"description": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"site": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"image": {
+					"type": "text"
+				},
+				"width": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"height": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"fetched_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"retired_identities": {
+			"columns": {
+				"kind": {
+					"type": "text",
+					"notNull": true,
+					"check": "kind in ('handle', 'email', 'ip')"
+				},
+				"value": {
+					"type": "text",
+					"notNull": true
+				},
+				"user_id": {
+					"type": "bigint"
+				},
+				"reason": {
+					"type": "text",
+					"notNull": true,
+					"default": "''"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			},
+			"primaryKey": [
+				"kind",
+				"value"
+			]
+		},
+		"account_labels": {
+			"columns": {
+				"id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true
+				},
+				"text": {
+					"type": "text",
+					"notNull": true,
+					"check": "length(text) between 1 and 40"
+				},
+				"badge_id": {
+					"type": "bigint",
+					"references": {
+						"table": "custom_badges",
+						"column": "id",
+						"onDelete": "set null"
+					}
+				},
+				"url": {
+					"type": "text"
+				},
+				"created_at": {
+					"type": "timestamp",
+					"notNull": true,
+					"default": "now()"
+				}
+			}
+		},
+		"user_stats": {
+			"columns": {
+				"user_id": {
+					"type": "bigint",
+					"notNull": true,
+					"primaryKey": true,
+					"references": {
+						"table": "users",
+						"column": "id",
+						"onDelete": "cascade"
+					}
+				},
+				"posts": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"articles": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"media_posts": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"likes": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"highlights": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"followers": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				},
+				"following": {
+					"type": "integer",
+					"notNull": true,
+					"default": "0"
+				}
+			}
+		}
+	},
+	"indexes": {
+		"users_screen_name_key": {
+			"table": "users",
+			"expressions": [
+				"lower(screen_name)"
+			],
+			"unique": true
+		},
+		"posts_replies_idx": {
+			"table": "posts",
+			"expressions": [
+				"reply_to_id",
+				"user_id"
+			]
+		},
+		"posts_user_idx": {
+			"table": "posts",
+			"expressions": [
+				"user_id",
+				"id desc"
+			]
+		},
+		"posts_reply_user_idx": {
+			"table": "posts",
+			"expressions": [
+				"reply_to_user_id",
+				"created_at"
+			],
+			"where": "reply_to_user_id is not null"
+		},
+		"user_badges_badge_idx": {
+			"table": "user_badges",
+			"expressions": [
+				"badge_id"
+			]
+		},
+		"users_email_idx": {
+			"table": "users",
+			"expressions": [
+				"lower(email)"
+			],
+			"unique": true
+		},
+		"sessions_id_key": {
+			"table": "sessions",
+			"expressions": [
+				"id"
+			],
+			"unique": true
+		},
+		"staff_notes_user_idx": {
+			"table": "staff_notes",
+			"expressions": [
+				"user_id",
+				"id desc"
+			]
+		},
+		"staff_notes_actor_idx": {
+			"table": "staff_notes",
+			"expressions": [
+				"actor_id"
+			]
+		},
+		"staff_messages_user_idx": {
+			"table": "staff_messages",
+			"expressions": [
+				"user_id",
+				"id desc"
+			]
+		},
+		"staff_messages_actor_idx": {
+			"table": "staff_messages",
+			"expressions": [
+				"actor_id"
+			]
+		},
+		"moderation_appeals_user_idx": {
+			"table": "moderation_appeals",
+			"expressions": [
+				"user_id",
+				"id desc"
+			]
+		},
+		"moderation_appeals_message_idx": {
+			"table": "moderation_appeals",
+			"expressions": [
+				"message_id"
+			]
+		},
+		"moderation_appeals_reviewer_idx": {
+			"table": "moderation_appeals",
+			"expressions": [
+				"reviewer_id"
+			]
+		},
+		"moderation_appeals_open_user_idx": {
+			"table": "moderation_appeals",
+			"expressions": [
+				"user_id"
+			],
+			"unique": true,
+			"where": "status='open'"
+		},
+		"users_notes_alias_key": {
+			"table": "users",
+			"expressions": [
+				"notes_alias"
+			],
+			"unique": true
+		},
+		"client_platforms_creator_idx": {
+			"table": "client_platforms",
+			"expressions": [
+				"creator_id"
+			]
+		},
+		"community_notes_author_idx": {
+			"table": "community_notes",
+			"expressions": [
+				"author_id"
+			]
+		},
+		"community_note_ratings_user_idx": {
+			"table": "community_note_ratings",
+			"expressions": [
+				"user_id"
+			]
+		},
+		"community_note_requests_user_idx": {
+			"table": "community_note_requests",
+			"expressions": [
+				"user_id"
+			]
+		},
+		"likes_post_user_idx": {
+			"table": "likes",
+			"expressions": [
+				"post_id",
+				"user_id"
+			]
+		},
+		"likes_created_idx": {
+			"table": "likes",
+			"expressions": [
+				"created_at"
+			]
+		},
+		"reposts_post_user_idx": {
+			"table": "reposts",
+			"expressions": [
+				"post_id",
+				"user_id"
+			]
+		},
+		"reposts_created_idx": {
+			"table": "reposts",
+			"expressions": [
+				"created_at"
+			]
+		},
+		"reposts_id_idx": {
+			"table": "reposts",
+			"expressions": [
+				"id"
+			]
+		},
+		"bookmarks_post_idx": {
+			"table": "bookmarks",
+			"expressions": [
+				"post_id"
+			]
+		},
+		"follows_followee_created_idx": {
+			"table": "follows",
+			"expressions": [
+				"followee_id",
+				"created_at"
+			]
+		},
+		"media_post_idx": {
+			"table": "media",
+			"expressions": [
+				"post_id",
+				"position"
+			]
+		},
+		"reposts_user_idx": {
+			"table": "reposts",
+			"expressions": [
+				"user_id",
+				"id desc"
+			]
+		},
+		"posts_top_level_idx": {
+			"table": "posts",
+			"expressions": [
+				"id"
+			],
+			"where": "reply_to_id is null"
+		},
+		"articles_user_idx": {
+			"table": "articles",
+			"expressions": [
+				"user_id",
+				"state",
+				"modified_at desc"
+			]
+		},
+		"post_mentions_user_idx": {
+			"table": "post_mentions",
+			"expressions": [
+				"user_id"
+			]
+		},
+		"posts_quotes_idx": {
+			"table": "posts",
+			"expressions": [
+				"quote_id",
+				"user_id"
+			],
+			"where": "quote_id is not null"
+		},
+		"blocks_blocked_idx": {
+			"table": "blocks",
+			"expressions": [
+				"blocked_id"
+			]
+		},
+		"muted_keywords_user_word_idx": {
+			"table": "muted_keywords",
+			"expressions": [
+				"user_id",
+				"lower(keyword)"
+			],
+			"unique": true
+		},
+		"users_suspended_idx": {
+			"table": "users",
+			"expressions": [
+				"id"
+			],
+			"where": "status = 'suspended'"
+		},
+		"audit_log_created_idx": {
+			"table": "audit_log",
+			"expressions": [
+				"created_at desc"
+			]
+		},
+		"affiliations_user_idx": {
+			"table": "affiliations",
+			"expressions": [
+				"user_id"
+			],
+			"unique": true
+		},
+		"reports_status_idx": {
+			"table": "reports",
+			"expressions": [
+				"status",
+				"created_at desc"
+			]
+		},
+		"username_changes_user_idx": {
+			"table": "username_changes",
+			"expressions": [
+				"user_id",
+				"changed_at desc"
+			]
+		},
+		"chat_members_user_idx": {
+			"table": "chat_members",
+			"expressions": [
+				"user_id"
+			]
+		},
+		"chat_events_conversation_idx": {
+			"table": "chat_events",
+			"expressions": [
+				"conversation_id",
+				"kind",
+				"seq desc"
+			]
+		},
+		"chat_events_conversation_seq_idx": {
+			"table": "chat_events",
+			"expressions": [
+				"conversation_id",
+				"seq desc"
+			]
+		},
+		"chat_events_sender_kind_idx": {
+			"table": "chat_events",
+			"expressions": [
+				"conversation_id",
+				"kind",
+				"sender_id",
+				"seq desc"
+			]
+		},
+		"chat_events_sender_idx": {
+			"table": "chat_events",
+			"expressions": [
+				"sender_id"
+			]
+		},
+		"chat_events_created_idx": {
+			"table": "chat_events",
+			"expressions": [
+				"created_at"
+			]
+		},
+		"chat_conversations_creator_idx": {
+			"table": "chat_conversations",
+			"expressions": [
+				"creator_id"
+			]
+		},
+		"chat_trust_target_idx": {
+			"table": "chat_trust",
+			"expressions": [
+				"trusted_id"
+			]
+		},
+		"chat_hidden_events_seq_idx": {
+			"table": "chat_hidden_events",
+			"expressions": [
+				"seq"
+			]
+		},
+		"chat_uploads_uploader_idx": {
+			"table": "chat_uploads",
+			"expressions": [
+				"uploader_id"
+			]
+		},
+		"chat_events_audience_idx": {
+			"table": "chat_events",
+			"expressions": [
+				"audience_id"
+			]
+		},
+		"users_org_badge_idx": {
+			"table": "users",
+			"expressions": [
+				"org_badge_id"
+			]
+		},
+		"users_status_until_idx": {
+			"table": "users",
+			"expressions": [
+				"status_until"
+			],
+			"where": "status_until is not null"
+		},
+		"lists_owner_idx": {
+			"table": "lists",
+			"expressions": [
+				"owner_id"
+			]
+		},
+		"list_members_user_idx": {
+			"table": "list_members",
+			"expressions": [
+				"user_id"
+			]
+		},
+		"list_subscribers_user_idx": {
+			"table": "list_subscribers",
+			"expressions": [
+				"user_id"
+			]
+		},
+		"communities_name_key": {
+			"table": "communities",
+			"expressions": [
+				"lower(name)"
+			],
+			"unique": true
+		},
+		"community_members_user_idx": {
+			"table": "community_members",
+			"expressions": [
+				"user_id"
+			]
+		},
+		"community_rules_community_idx": {
+			"table": "community_rules",
+			"expressions": [
+				"community_id",
+				"position"
+			]
+		},
+		"posts_community_idx": {
+			"table": "posts",
+			"expressions": [
+				"community_id",
+				"id desc"
+			],
+			"where": "community_id is not null"
+		},
+		"scheduled_posts_due_idx": {
+			"table": "scheduled_posts",
+			"expressions": [
+				"execute_at"
+			],
+			"where": "kind = 'scheduled'"
+		},
+		"scheduled_posts_user_idx": {
+			"table": "scheduled_posts",
+			"expressions": [
+				"user_id",
+				"kind"
+			]
+		},
+		"post_versions_post_idx": {
+			"table": "post_versions",
+			"expressions": [
+				"post_id",
+				"seq"
+			]
+		},
+		"follow_requests_target_idx": {
+			"table": "follow_requests",
+			"expressions": [
+				"target_id",
+				"created_at desc"
+			]
+		},
+		"bookmark_folders_user_idx": {
+			"table": "bookmark_folders",
+			"expressions": [
+				"user_id",
+				"created_at"
+			]
+		},
+		"topics_name_key": {
+			"table": "topics",
+			"expressions": [
+				"lower(name)"
+			],
+			"unique": true
+		},
+		"topic_follows_topic_idx": {
+			"table": "topic_follows",
+			"expressions": [
+				"topic_id"
+			]
+		},
+		"topic_not_interested_topic_idx": {
+			"table": "topic_not_interested",
+			"expressions": [
+				"topic_id"
+			]
+		},
+		"post_notifications_target_idx": {
+			"table": "post_notifications",
+			"expressions": [
+				"target_id"
+			]
+		},
+		"contacts_user_idx": {
+			"table": "contacts",
+			"expressions": [
+				"user_id",
+				"id"
+			]
+		},
+		"login_events_user_idx": {
+			"table": "login_events",
+			"expressions": [
+				"user_id",
+				"created_at desc"
+			]
+		},
+		"mail_log_created_idx": {
+			"table": "mail_log",
+			"expressions": [
+				"created_at desc"
+			]
+		},
+		"push_subscriptions_user_idx": {
+			"table": "push_subscriptions",
+			"expressions": [
+				"user_id"
+			]
+		},
+		"email_confirmations_user_idx": {
+			"table": "email_confirmations",
+			"expressions": [
+				"user_id"
+			]
+		},
+		"error_log_last_idx": {
+			"table": "error_log",
+			"expressions": [
+				"last_at desc"
+			]
+		},
+		"affiliation_requests_user_idx": {
+			"table": "affiliation_requests",
+			"expressions": [
+				"user_id"
+			]
+		},
+		"unfollows_followee_idx": {
+			"table": "unfollows",
+			"expressions": [
+				"followee_id",
+				"created_at"
+			]
+		},
+		"post_views_created_idx": {
+			"table": "post_views",
+			"expressions": [
+				"created_at"
+			]
+		},
+		"stickers_pack_idx": {
+			"table": "stickers",
+			"expressions": [
+				"pack_id",
+				"position"
+			]
+		},
+		"api_tokens_user_idx": {
+			"table": "api_tokens",
+			"expressions": [
+				"user_id"
+			]
+		},
+		"delegation_members_member_idx": {
+			"table": "delegation_members",
+			"expressions": [
+				"member_id"
+			]
+		},
+		"login_events_ip_idx": {
+			"table": "login_events",
+			"expressions": [
+				"ip",
+				"created_at desc"
+			]
+		},
+		"media_user_post_idx": {
+			"table": "media",
+			"expressions": [
+				"user_id",
+				"post_id"
+			],
+			"where": "post_id is not null"
+		}
+	},
+	"views": {
+		"feed_items": {
+			"postgres": "select p.id as item_id, p.id as post_id, null::bigint as reposter_id, p.user_id as author_id,\n\t\tp.reply_to_id is not null as is_reply, p.created_at\n\tfrom posts p\n\tunion all\n\tselect r.id, r.post_id, r.user_id, r.user_id, false, r.created_at\n\tfrom reposts r",
+			"sqlite": "select p.id as item_id, p.id as post_id, null as reposter_id, p.user_id as author_id,\n\t\tp.reply_to_id is not null as is_reply, p.created_at\n\tfrom posts p\n\tunion all\n\tselect r.id, r.post_id, r.user_id, r.user_id, false, r.created_at\n\tfrom reposts r"
+		}
+	},
+	"effects": {
+		"postgres": [
+			"create or replace function user_stats_posts() returns trigger language plpgsql as $$\nbegin\n\tif tg_op = 'INSERT' then\n\t\tinsert into user_stats (user_id, posts, articles)\n\t\t\tselect user_id, count(*), count(article_id) from new_rows group by user_id\n\t\t\ton conflict (user_id) do update set posts = user_stats.posts + excluded.posts, articles = user_stats.articles + excluded.articles;\n\telse\n\t\tupdate user_stats s set posts = s.posts - d.posts, articles = s.articles - d.articles\n\t\t\tfrom (select user_id, count(*) as posts, count(article_id) as articles from old_rows group by user_id) d where s.user_id = d.user_id;\n\tend if;\n\treturn null;\nend $$;",
+			"create or replace trigger user_stats_posts_insert after insert on posts referencing new table as new_rows for each statement execute function user_stats_posts();",
+			"create or replace trigger user_stats_posts_delete after delete on posts referencing old table as old_rows for each statement execute function user_stats_posts();",
+			"create or replace function user_stats_likes() returns trigger language plpgsql as $$\nbegin\n\tif tg_op = 'INSERT' then\n\t\tinsert into user_stats (user_id, likes) select user_id, count(*) from new_rows group by user_id\n\t\t\ton conflict (user_id) do update set likes = user_stats.likes + excluded.likes;\n\telse\n\t\tupdate user_stats s set likes = s.likes - d.n from (select user_id, count(*) as n from old_rows group by user_id) d where s.user_id = d.user_id;\n\tend if;\n\treturn null;\nend $$;",
+			"create or replace trigger user_stats_likes_insert after insert on likes referencing new table as new_rows for each statement execute function user_stats_likes();",
+			"create or replace trigger user_stats_likes_delete after delete on likes referencing old table as old_rows for each statement execute function user_stats_likes();",
+			"create or replace function user_stats_highlights() returns trigger language plpgsql as $$\nbegin\n\tif tg_op = 'INSERT' then\n\t\tinsert into user_stats (user_id, highlights) select user_id, count(*) from new_rows group by user_id\n\t\t\ton conflict (user_id) do update set highlights = user_stats.highlights + excluded.highlights;\n\telse\n\t\tupdate user_stats s set highlights = s.highlights - d.n from (select user_id, count(*) as n from old_rows group by user_id) d where s.user_id = d.user_id;\n\tend if;\n\treturn null;\nend $$;",
+			"create or replace trigger user_stats_highlights_insert after insert on highlights referencing new table as new_rows for each statement execute function user_stats_highlights();",
+			"create or replace trigger user_stats_highlights_delete after delete on highlights referencing old table as old_rows for each statement execute function user_stats_highlights();",
+			"create or replace function user_stats_follows() returns trigger language plpgsql as $$\nbegin\n\tif tg_op = 'INSERT' then\n\t\tinsert into user_stats (user_id, followers, following)\n\t\t\tselect id, sum(followers), sum(following) from (\n\t\t\t\tselect followee_id as id, 1 as followers, 0 as following from new_rows\n\t\t\t\tunion all select follower_id, 0, 1 from new_rows\n\t\t\t) x group by id\n\t\t\ton conflict (user_id) do update set followers = user_stats.followers + excluded.followers, following = user_stats.following + excluded.following;\n\telse\n\t\tupdate user_stats s set followers = s.followers - d.followers, following = s.following - d.following\n\t\t\tfrom (select id, sum(followers) as followers, sum(following) as following from (\n\t\t\t\tselect followee_id as id, 1 as followers, 0 as following from old_rows\n\t\t\t\tunion all select follower_id, 0, 1 from old_rows\n\t\t\t) x group by id) d where s.user_id = d.id;\n\tend if;\n\treturn null;\nend $$;",
+			"create or replace trigger user_stats_follows_insert after insert on follows referencing new table as new_rows for each statement execute function user_stats_follows();",
+			"create or replace trigger user_stats_follows_delete after delete on follows referencing old table as old_rows for each statement execute function user_stats_follows();",
+			"create or replace function user_stats_media() returns trigger language plpgsql as $$\ndeclare\n\taffected bigint[];\nbegin\n\tif tg_op = 'INSERT' then\n\t\tselect array_agg(distinct user_id) into affected from new_rows where post_id is not null;\n\telsif tg_op = 'DELETE' then\n\t\tselect array_agg(distinct user_id) into affected from old_rows where post_id is not null;\n\telse\n\t\tselect array_agg(distinct n.user_id) into affected from new_rows n join old_rows o on o.id = n.id where n.post_id is distinct from o.post_id;\n\tend if;\n\tif affected is null then return null; end if;\n\tinsert into user_stats (user_id, media_posts)\n\t\tselect a, (select count(distinct m.post_id) from media m where m.user_id = a and m.post_id is not null)\n\t\tfrom unnest(affected) a where exists (select 1 from users where id = a)\n\t\ton conflict (user_id) do update set media_posts = excluded.media_posts;\n\treturn null;\nend $$;",
+			"create or replace trigger user_stats_media_insert after insert on media referencing new table as new_rows for each statement execute function user_stats_media();",
+			"create or replace trigger user_stats_media_update after update on media referencing new table as new_rows old table as old_rows for each statement execute function user_stats_media();",
+			"create or replace trigger user_stats_media_delete after delete on media referencing old table as old_rows for each statement execute function user_stats_media();"
+		],
+		"sqlite": [
+			"create trigger if not exists user_stats_posts_insert after insert on posts begin\n\tinsert into user_stats (user_id, posts) select new.user_id, (1) where exists (select 1 from users where id = new.user_id) on conflict(user_id) do update set posts = posts + excluded.posts;\n\tinsert into user_stats (user_id, articles) select new.user_id, (new.article_id is not null) where exists (select 1 from users where id = new.user_id) on conflict(user_id) do update set articles = articles + excluded.articles;\nend;",
+			"create trigger if not exists user_stats_posts_delete after delete on posts begin\n\tupdate user_stats set posts = posts - (1) where user_id = old.user_id;\n\tupdate user_stats set articles = articles - (old.article_id is not null) where user_id = old.user_id;\nend;",
+			"create trigger if not exists user_stats_likes_insert after insert on likes begin\n\tinsert into user_stats (user_id, likes) select new.user_id, (1) where exists (select 1 from users where id = new.user_id) on conflict(user_id) do update set likes = likes + excluded.likes;\nend;",
+			"create trigger if not exists user_stats_likes_delete after delete on likes begin\n\tupdate user_stats set likes = likes - (1) where user_id = old.user_id;\nend;",
+			"create trigger if not exists user_stats_highlights_insert after insert on highlights begin\n\tinsert into user_stats (user_id, highlights) select new.user_id, (1) where exists (select 1 from users where id = new.user_id) on conflict(user_id) do update set highlights = highlights + excluded.highlights;\nend;",
+			"create trigger if not exists user_stats_highlights_delete after delete on highlights begin\n\tupdate user_stats set highlights = highlights - (1) where user_id = old.user_id;\nend;",
+			"create trigger if not exists user_stats_follows_insert after insert on follows begin\n\tinsert into user_stats (user_id, followers) select new.followee_id, (1) where exists (select 1 from users where id = new.followee_id) on conflict(user_id) do update set followers = followers + excluded.followers;\n\tinsert into user_stats (user_id, following) select new.follower_id, (1) where exists (select 1 from users where id = new.follower_id) on conflict(user_id) do update set following = following + excluded.following;\nend;",
+			"create trigger if not exists user_stats_follows_delete after delete on follows begin\n\tupdate user_stats set followers = followers - (1) where user_id = old.followee_id;\n\tupdate user_stats set following = following - (1) where user_id = old.follower_id;\nend;",
+			"create trigger if not exists user_stats_media_insert after insert on media begin\n\tinsert into user_stats(user_id, media_posts) select new.user_id, (select count(distinct post_id) from media where user_id = new.user_id and post_id is not null) where exists (select 1 from users where id = new.user_id) on conflict(user_id) do update set media_posts = excluded.media_posts;\nend;",
+			"create trigger if not exists user_stats_media_delete after delete on media begin\n\tinsert into user_stats(user_id, media_posts) select old.user_id, (select count(distinct post_id) from media where user_id = old.user_id and post_id is not null) where exists (select 1 from users where id = old.user_id) on conflict(user_id) do update set media_posts = excluded.media_posts;\nend;",
+			"create trigger if not exists user_stats_media_update after update on media begin\n\tinsert into user_stats(user_id, media_posts) select old.user_id, (select count(distinct post_id) from media where user_id = old.user_id and post_id is not null) where exists (select 1 from users where id = old.user_id) on conflict(user_id) do update set media_posts = excluded.media_posts;\n\tinsert into user_stats(user_id, media_posts) select new.user_id, (select count(distinct post_id) from media where user_id = new.user_id and post_id is not null) where exists (select 1 from users where id = new.user_id) on conflict(user_id) do update set media_posts = excluded.media_posts;\nend;"
+		]
+	}
+}

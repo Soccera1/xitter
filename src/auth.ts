@@ -17,7 +17,7 @@ export type User = {
 	flag?: string | null;
 	// custom badges in order (admin panel); see badgeList in model.ts
 	badges?: { id: string; name: string }[];
-	// see schema.sql: active, restricted, limited or suspended
+	// see schema.ts: active, restricted, limited or suspended
 	status?: "active" | "restricted" | "limited" | "suspended";
 	// staff only: admin, moderator or support
 	role?: "admin" | "moderator" | "support" | null;

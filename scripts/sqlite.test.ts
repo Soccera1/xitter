@@ -22,28 +22,15 @@ const user = async (id: string, name: string) =>
 
 test("SQLite selection, persistent schema, constraints, and complete table/column coverage", async () => {
 	expect(databaseBackend).toBe("sqlite");
-	const pg = readFileSync(join(import.meta.dir, "../src/schema.sql"), "utf8")
-		.replace(/--[^\n]*/g, "")
-		.replace(/(?:do\s+\$\$|create or replace function)[\s\S]*?end\s*\$\$\s*;/gi, "");
-	const expected = new Map<string, Set<string>>();
-	for (const m of pg.matchAll(/create table if not exists (\w+)\s*\(([\s\S]*?)\n\);/gi)) {
-		const columns = new Set(
-			[...m[2].matchAll(/(?:^|,)\s*(\w+)\s+(?:bigint|text|int|integer|smallint|boolean|timestamptz|jsonb|uuid|bytea|date)\b/gi)].map((x) => x[1]),
-		);
-		expected.set(m[1], columns);
-	}
-	for (const m of pg.matchAll(/alter table (\w+) add column if not exists (\w+)/gi)) expected.get(m[1])!.add(m[2]);
-	const tables = await sql`select name from sqlite_master where type = 'table'`;
-	expect(tables.map((r: any) => r.name).sort()).toEqual([...expected.keys()].sort());
-	for (const [table, columns] of expected) {
+	const { schema } = await import("../src/schema");
+	const tables = await sql`select name from sqlite_master where type = 'table' and name <> '_xitter_schema_history'`;
+	expect(tables.map((r: any) => r.name).sort()).toEqual(Object.keys(schema.tables).sort());
+	for (const [table, definition] of Object.entries(schema.tables)) {
 		const actual = await sql.unsafe(`pragma table_info("${table}")`);
-		for (const col of columns) expect(actual.some((r: any) => r.name === col)).toBe(true);
+		expect(actual.map((r: any) => r.name).sort()).toEqual(Object.keys(definition.columns).sort());
 	}
 	const indexes = await sql`select name from sqlite_master where type = 'index'`;
-	const dropped = new Set([...pg.matchAll(/drop index if exists (\w+)/gi)].map((m) => m[1]));
-	for (const m of pg.matchAll(/create (?:unique )?index if not exists (\w+)/gi)) {
-		if (!dropped.has(m[1])) expect(indexes.some((r: any) => r.name === m[1])).toBe(true);
-	}
+	for (const name of Object.keys(schema.indexes)) expect(indexes.some((r: any) => r.name === name)).toBe(true);
 	await user("9007199254740993", "Первый");
 	await expect(user("9007199254740994", "ПЕРВЫЙ")).rejects.toThrow();
 	await expect(Promise.resolve(sql`insert into follows(follower_id,followee_id) values (9007199254740993,999)`)).rejects.toThrow();
@@ -200,7 +187,7 @@ test("application projections retain booleans, JSON and numeric counters", async
 test("in-memory databases work and newer on-disk schema versions are rejected", async () => {
 	const memory = openSQLite(":memory:");
 	try {
-		memory.db.exec(readFileSync(join(import.meta.dir, "../src/schema.sqlite.sql"), "utf8"));
+		memory.db.exec(readFileSync(join(import.meta.dir, "../src/db/migrations/sqlite/001-initial.sql"), "utf8"));
 		expect(await memory.sql`select id from users`).toHaveLength(0);
 	} finally {
 		await memory.sql.close();

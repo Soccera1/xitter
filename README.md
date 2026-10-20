@@ -152,8 +152,49 @@ restored with `pg_restore`. Backups restore to the same database engine; changin
 `DATABASE_URL` does not transfer existing data between engines.
 
 Run the self-contained SQLite regression checks with `bun run test:sqlite`.
-Database changes must update both `src/schema.sql` and the versioned SQLite
-schema/migrations in `src/db.ts` and `src/schema.sqlite.sql`.
+
+### Changing the database schema
+
+`src/schema.ts` is the shared, typed source of truth for PostgreSQL and SQLite.
+Maintainers edit it once; startup generates and applies the backend-specific
+upgrade automatically. For example, add a field to a table's `columns`:
+
+```ts
+email_opt_in: column("boolean", { notNull: true, default: { value: false } }),
+```
+
+Automatic upgrades cover new tables and columns, defaults, nullability, checks,
+foreign keys, unique constraints, indexes, and views. SQLite rebuilds tables
+transactionally when an alteration cannot be expressed with `ADD COLUMN`, copying
+existing values and applying defaults to new fields. Rows, foreign keys, custom
+indexes, and custom triggers/views are preserved. Constraints are validated before
+commit; a failed upgrade rolls back its data and its history together.
+
+Drops, ambiguous renames, and unsafe type conversions require an explicit entry
+in `src/db/migrations.ts`. Those ordered SQL steps run once before schema sync,
+so a required field can be backfilled before becoming `NOT NULL`. Released
+migration IDs and statements cannot be changed, removed, or reordered. Backend-native
+trigger code lives in `src/db/schema-effects.ts`; changes there are versioned too.
+
+`_xitter_schema_history` records each revision's schema fingerprint, declaration,
+executed statements, and time. SQLite's `user_version` advances with that history.
+Existing v1 installations are adopted automatically; reverting to an older recorded
+schema is rejected. An unchanged fingerprint skips reconciliation on subsequent
+starts. Direct, unrecorded database schema edits are unsupported. Back up the
+database before deploying a schema change, and roll back application deployments
+with a forward migration or restore rather than an older schema declaration.
+
+Files under `src/db/migrations/` are frozen historical inputs, **not** the place
+for routine edits. When rebasing upstream schema changes, put the resulting
+structural declarations into `src/schema.ts` and any data transformations into
+`src/db/migrations.ts`; do not update the v1 snapshots. The synchronizer does not
+infer data transformations from schema changes.
+
+`bun run test:databases` tests real v1 upgrades, row/counter/foreign-key preservation,
+failed-upgrade rollback, index and constraint edits, and one-time data migrations.
+Set `TEST_POSTGRES_URL` to a disposable PostgreSQL instance whose role may create
+test databases to run the same tests on both engines; without it the PostgreSQL
+cases are skipped. CI supplies PostgreSQL and requires both backends to pass.
 
 ### With Docker Compose
 

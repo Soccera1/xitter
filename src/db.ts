@@ -1,6 +1,6 @@
 import { SQL } from "bun";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { schema } from "./schema";
+import { synchronizePostgres, synchronizeSQLite } from "./db/schema-sync";
 
 export const databaseURL = process.env.DATABASE_URL ?? "postgres://dev@localhost:5432/xitter";
 export const databaseBackend = /^(sqlite:|:memory:$)/.test(databaseURL) ? "sqlite" : "postgres";
@@ -23,29 +23,10 @@ export const sql: SQL = (sqlite?.sql ??
 		},
 	})) as SQL;
 
-// PostgreSQL uses an idempotent schema; SQLite tracks schema versions with user_version.
+// Routine edits in schema.ts produce versioned upgrades for either backend.
 export async function migrate() {
-	if (sqlite) {
-		await sqlite.enqueue(() => {
-			const version = Number((sqlite.db.query("pragma user_version").get() as any).user_version);
-			if (version > 1) throw new Error("SQLite database was created by a newer version of Xitter");
-			sqlite.db.exec("begin immediate");
-			try {
-				sqlite.db.exec(readFileSync(join(import.meta.dir, "schema.sqlite.sql"), "utf8"));
-				sqlite.db.exec("pragma user_version = 1");
-				sqlite.db.exec("commit");
-			} catch (e) {
-				sqlite.db.exec("rollback");
-				throw e;
-			}
-		});
-		return;
-	}
-	await sql.begin(async (tx) => {
-		await tx`set local statement_timeout = 0`;
-		await tx`set local lock_timeout = 0`;
-		await tx.unsafe(readFileSync(join(import.meta.dir, "schema.sql"), "utf8"));
-	});
+	if (sqlite) return sqlite.enqueue(() => synchronizeSQLite(sqlite, schema));
+	await synchronizePostgres(sql, schema);
 }
 
 // VACUUM INTO makes a consistent standalone snapshot, including committed WAL data.

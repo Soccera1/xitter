@@ -7,7 +7,7 @@ import { sql } from "./db";
 export const badgesOf = (userId: ReturnType<typeof sql>) => sql`(select json_agg(json_build_object('id', b.id::text, 'name', b.name) order by ub.position, b.name)
 	from user_badges ub join custom_badges b on b.id = ub.badge_id where ub.user_id = ${userId})`;
 
-// one of the account's counters (user_stats, kept by triggers in schema.sql)
+// one of the account's counters (user_stats, kept by triggers in schema.ts)
 const stat = (name: string) => sql`coalesce((select s.${sql(name)} from user_stats s where s.user_id = u.id), 0)`;
 
 // Author columns shared by every query that returns a user; expects the users
