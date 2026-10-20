@@ -8,6 +8,7 @@ import { openSQLite } from "../src/sqlite";
 import { HISTORY, synchronizePostgres, synchronizeSQLite } from "../src/db/schema-sync";
 import type { Schema } from "../src/db/schema-types";
 import type { Migration } from "../src/db/migrations";
+import { migrations } from "../src/db/migrations";
 
 const directory = mkdtempSync(join(tmpdir(), "xitter-schema-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -48,6 +49,65 @@ const seed = (sql: any) => sql`insert into users(id,screen_name,name,password_ha
 
 for (const backend of ["sqlite", "postgres"] as const) {
 	const run = backend === "postgres" && !process.env.TEST_POSTGRES_URL ? test.skip : test;
+	if (backend === "postgres")
+		run("postgres: upstream affiliations, existing triggers and serial outbox survive adoption", async () => {
+			const db = await fixture(backend);
+			try {
+				await db.sql.unsafe(readFileSync(join(import.meta.dir, "../src/db/migrations/postgres/001-initial.sql"), "utf8"));
+				await db.sql.unsafe("drop index affiliations_user_idx");
+				await db.sql`insert into users(id,screen_name,name,password_hash) values(1,'adopted_user','User','unused'),(2,'adopted_org_a','Org','unused'),(3,'adopted_org_b','Org','unused')`;
+				await db.sql`insert into affiliations(org_id,user_id) values(2,1),(3,1)`;
+				await db.sql.unsafe(
+					"create table federation_outbox(seq bigserial primary key,kind text not null,a bigint not null,b bigint,created_at timestamptz not null default now())",
+				);
+				await db.sql`insert into federation_outbox(kind,a) values('user',1)`;
+				for (const effect of schema.effects.postgres) if (/create or replace (?:function|trigger) affiliations_cap\b/.test(effect)) await db.sql.unsafe(effect);
+				await db.sync(structuredClone(schema), migrations);
+				await db.sync(structuredClone(schema), migrations);
+				expect(await db.sql`select 1 from affiliations where user_id=1`).toHaveLength(2);
+				await db.sql`insert into posts(id,user_id,text,conversation_id) values(42,1,'new after adoption',42)`;
+				expect(await db.sql`select 1 from federation_outbox where kind='post' and a=42`).toHaveLength(1);
+			} finally {
+				await db.close();
+			}
+		});
+	run(`${backend}: upstream timestamp migration preserves history and federation triggers remain local`, async () => {
+		const db = await fixture(backend);
+		try {
+			if (backend === "postgres") await db.sql.unsafe(readFileSync(join(import.meta.dir, "../src/db/migrations/postgres/001-initial.sql"), "utf8"));
+			await seed(db.sql);
+			await db.sql`insert into posts(id,user_id,text,conversation_id,created_at) values (456,123,'historical',456,${new Date("2020-01-02T03:04:05Z")})`;
+			await db.sync(structuredClone(schema), migrations);
+			const [post] = await db.sql`select created_at,received_at from posts where id = 456`;
+			expect(post.received_at.getTime()).toBe(post.created_at.getTime());
+			const before = await history(db.sql);
+			await db.sync(structuredClone(schema), migrations);
+			expect(await history(db.sql)).toHaveLength(before.length);
+			for (let i = 1; i <= 5; i++)
+				await db.sql`insert into users(id,screen_name,name,password_hash) values (${1000 + i},${`org_${i}`},'Organisation','unused')`;
+			for (let i = 1; i <= 4; i++) await db.sql`insert into affiliations(org_id,user_id) values (${1000 + i},123)`;
+			let capped = false;
+			try {
+				await db.sql`insert into affiliations(org_id,user_id) values (1005,123)`;
+			} catch (error) {
+				capped = /affiliation_limit/.test(String(error));
+			}
+			expect(capped).toBe(true);
+			await db.sql`update users set instance = 'remote.example', remote_id = 9 where id = 1005`;
+			await db.sql`delete from federation_outbox`;
+			await db.sql`insert into posts(id,user_id,text,conversation_id) values (457,123,'local',457),(458,1005,'remote',458)`;
+			const events = await db.sql`select kind,a from federation_outbox order by seq`;
+			expect(events.map((row: any) => [row.kind, String(row.a)])).toEqual([["post", "457"]]);
+			await db.sql`delete from posts where id = 457`;
+			const deleted = await db.sql`select kind,a from federation_outbox order by seq`;
+			expect(deleted.map((row: any) => [row.kind, String(row.a)])).toEqual([
+				["post", "457"],
+				["post", "457"],
+			]);
+		} finally {
+			await db.close();
+		}
+	});
 	run(
 		`${backend}: v1 adoption and automatic additions preserve rows, keys, counters and views`,
 		async () => {

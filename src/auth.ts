@@ -17,6 +17,7 @@ export type User = {
 	flag?: string | null;
 	// custom badges in order (admin panel); see badgeList in model.ts
 	badges?: { id: string; name: string }[];
+	remote_badges?: { name: string; url: string }[];
 	// see schema.ts: active, restricted, limited or suspended
 	status?: "active" | "restricted" | "limited" | "suspended";
 	// staff only: admin, moderator or support
@@ -30,6 +31,8 @@ export type User = {
 	verified_at?: Date | null;
 	// `since`: when the account joined the organisation
 	org?: { id: string; name: string; screen_name: string; avatar_url: string | null; since?: string } | null;
+	// the other organisations it is an affiliate of, up to three, after `org`
+	more_orgs?: { id: string; name: string; screen_name: string; avatar_url: string | null }[];
 	// for organisations: how many affiliates they have
 	affiliates?: number;
 	// the screen name of the account that runs this one (X's automated label)
@@ -41,6 +44,8 @@ export type User = {
 	// posts only for approved followers
 	protected?: boolean;
 	language?: string;
+	// the instance the account lives on; null for this one
+	instance?: string | null;
 	created_at: Date;
 	// present when the row was loaded through users.ts
 	stats?: {
@@ -69,6 +74,8 @@ export type Viewer = User & {
 	csrf: string;
 	token: string;
 	postSource?: string;
+	instance?: string | null;
+	superadmin?: boolean;
 	// set while a delegate acts as this account (delegation.ts): who they are
 	actor?: { id: string; screen_name: string; role: "Admin" | "Contributor" };
 };
@@ -90,30 +97,42 @@ export async function login(screenName: string, password: string): Promise<{ tok
 	if (password.length > 1024 || screenName.length > 64) return undefined;
 	await expireSanctions();
 	// accounts with a second factor sign in through the dialog's code step (startSession)
-	const [u] = await sql`select id, password_hash, deactivated_at from users where lower(screen_name) = lower(${screenName}) and not totp_enabled
+	const [u] = await sql`select id, password_hash from users where lower(screen_name) = lower(${screenName}) and not totp_enabled and instance is null
 		and (status <> 'suspended' or deactivated_at > now() - ${sql.duration(30, "day")})`;
 	// verify against a dummy hash when the user is unknown so timing does not reveal it
 	const ok = await Bun.password.verify(password, u?.password_hash ?? DUMMY_HASH).catch(() => false);
 	if (!u || !ok) return undefined;
-	// signing in within 30 days of deactivating brings the account back
-	if (u.deactivated_at) {
-		const back = await sql`update users set status = 'active', deactivated_at = null where id = ${sql.cast(u.id, "bigint")} and deactivated_at > now() - ${sql.duration(30, "day")} returning id`;
-		if (!back.length) return undefined;
-	} else if ((await sql`select status from users where id = ${sql.cast(u.id, "bigint")}`)[0]?.status === "suspended") return undefined;
 	const token = randomHex(20);
 	const csrf = randomHex(32);
-	await sql`insert into sessions (token, user_id, csrf) values (${token}, ${sql.cast(u.id, "bigint")}, ${csrf})`;
-	await sql`update users set last_seen_at = now() where id = ${sql.cast(u.id, "bigint")}`;
-	return { token, csrf, userId: u.id };
+	const made = await sql.begin(async (tx) => {
+		// Hash verification runs without a lock. Recheck under the same account
+		// lock as password resets, so revoking sessions cannot miss this sign-in.
+		const [current] = await tx`select status, deactivated_at from users
+			where id = ${tx.cast(u.id, "bigint")} and password_hash = ${u.password_hash} and not totp_enabled and instance is null ${tx.lock(false)}`;
+		if (!current) return false;
+		// Signing in within 30 days of deactivating brings the account back.
+		if (current.deactivated_at) {
+			const back = await tx`update users set status = 'active', deactivated_at = null
+				where id = ${tx.cast(u.id, "bigint")} and deactivated_at > now() - ${tx.duration(30, "day")} returning id`;
+			if (!back.length) return false;
+		} else if (current.status === "suspended") return false;
+		await tx`insert into sessions (token, user_id, csrf) values (${token}, ${tx.cast(u.id, "bigint")}, ${csrf})`;
+		await tx`update users set last_seen_at = now() where id = ${tx.cast(u.id, "bigint")}`;
+		return true;
+	});
+	return made ? { token, csrf, userId: u.id } : undefined;
 }
 
-// a session for an account whose password and second factor were both checked
-export async function startSession(userId: string): Promise<{ token: string; csrf: string; userId: string }> {
+export type Session = { token: string; csrf: string; userId: string };
+
+// Pass the existing transaction when consuming a second-factor challenge, so
+// password resets cannot slip between the proof and the session insertion.
+export async function startSession(userId: string, executor: typeof sql = sql): Promise<Session> {
 	const token = randomHex(20);
 	const csrf = randomHex(32);
-	const made = await sql`insert into sessions (token, user_id, csrf) select ${token}, id, ${csrf} from users where id = ${sql.cast(userId, "bigint")} and status <> 'suspended' returning token`;
+	const made = await executor`insert into sessions (token, user_id, csrf) select ${token}, id, ${csrf} from users where id = ${executor.cast(userId, "bigint")} and status <> 'suspended' returning token`;
 	if (!made.length) throw new Error("account suspended");
-	await sql`update users set last_seen_at = now() where id = ${sql.cast(userId, "bigint")}`;
+	await executor`update users set last_seen_at = now() where id = ${executor.cast(userId, "bigint")}`;
 	return { token, csrf, userId };
 }
 
@@ -134,7 +153,7 @@ export function parseCookies(req: Request): Record<string, string> {
 
 import { requestCountry } from "./login-history";
 
-const viewerCols = () => sql`u.id, u.screen_name, u.name, u.bio, u.location, u.website, u.avatar_url, u.banner_url, u.verified_type, u.flag, u.status, u.role, u.protected, u.language, u.created_at,
+const viewerCols = () => sql`u.id, u.screen_name, u.name, u.bio, u.location, u.website, u.avatar_url, u.banner_url, u.verified_type, u.flag, u.status, u.role, u.protected, u.language, u.created_at, u.instance,
 	${sql.jsonGet(sql`
 	u.preferences`, sql`'discoverable_by_email'`, true)} = 'true' as discoverable_by_email,
 	(select coalesce(${sql.jsonAgg(sql.jsonObject(sql`'id'`, sql.cast(sql`b.id`, "text"), sql`'name'`, sql`b.name`), sql`ub.position, b.name`)}, '[]')
@@ -149,9 +168,10 @@ export async function viewerById(id: string): Promise<Omit<Viewer, "csrf" | "tok
 async function loadViewer(req: Request): Promise<Viewer | undefined> {
 	const token = parseCookies(req).auth_token;
 	if (!token) return undefined;
-	const [row] = await sql`select ${viewerCols()}, s.csrf, s.token
+	const [row] = await sql`select ${viewerCols()}, s.csrf, s.token, s.superadmin
 		from sessions s join users u on u.id = s.user_id
-		where s.token = ${token} and u.status <> 'suspended'`;
+		where s.token = ${token} and u.status <> 'suspended' and (s.expires_at is null or s.expires_at > now())
+			and (u.instance is null or (s.superadmin and s.expires_at is not null))`;
 	// for the admin panel's session list; written at most once a minute
 	if (row)
 		await sql`update sessions set last_seen_at = now(), user_agent = ${(req.headers.get("user-agent") ?? "").slice(0, 500)}

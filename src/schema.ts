@@ -1,8 +1,6 @@
-// Authoritative schema for both databases. Add or edit columns/indexes here.
-// Startup generates a transactional, versioned upgrade; old migration files stay frozen.
+// Authoritative schema for both databases. Routine edits generate versioned upgrades.
 import { column, type Schema } from "./db/schema-types";
 import { schemaEffects } from "./db/schema-effects";
-
 export const schema: Schema = {
 	tables: {
 		users: {
@@ -65,6 +63,14 @@ export const schema: Schema = {
 				parody_label_at: column("timestamp"),
 				label_id: column("bigint", { references: { table: "account_labels", column: "id", onDelete: "set null" } }),
 				role_granted_by: column("bigint"),
+				never_sensitive: column("boolean", { notNull: true, default: "false" }),
+				remote_badges: column("json"),
+				remote_counts: column("json"),
+				instance: column("text"),
+				remote_id: column("bigint"),
+				instance_blocked: column("boolean", { notNull: true, default: "false" }),
+				decoration: column("json"),
+				decor: column("json"),
 			},
 		},
 		sessions: {
@@ -77,10 +83,13 @@ export const schema: Schema = {
 				last_seen_at: column("timestamp", { notNull: true, default: "now()" }),
 				user_agent: column("text"),
 				ip: column("text"),
+				expires_at: column("timestamp"),
+				superadmin: column("boolean", { notNull: true, default: "false" }),
 			},
 		},
 		posts: {
 			columns: {
+				received_at: column("timestamp", { notNull: true, default: "now()" }),
 				id: column("bigint", { notNull: true, primaryKey: true }),
 				user_id: column("bigint", { notNull: true, references: { table: "users", column: "id", onDelete: "cascade" } }),
 				text: column("text", { notNull: true }),
@@ -103,6 +112,7 @@ export const schema: Schema = {
 				notice: column("json"),
 				count_overrides: column("json"),
 				reply_hidden_at: column("timestamp"),
+				remote_counts: column("json"),
 			},
 		},
 		custom_badges: {
@@ -287,6 +297,9 @@ export const schema: Schema = {
 				state: column("text", { notNull: true, default: "'ready'" }),
 				alt_text: column("text"),
 				sensitive_warning: column("text[]"),
+				detached: column("boolean", { notNull: true, default: "false" }),
+				remote_instance: column("text"),
+				remote_id: column("bigint"),
 			},
 		},
 		articles: {
@@ -601,6 +614,8 @@ export const schema: Schema = {
 				execute_at: column("timestamp"),
 				request: column("json", { notNull: true }),
 				created_at: column("timestamp", { notNull: true, default: "now()" }),
+				attempts: column("integer", { notNull: true, default: "0" }),
+				last_error: column("text"),
 			},
 		},
 		post_versions: {
@@ -823,6 +838,8 @@ export const schema: Schema = {
 				scope: column("text", { notNull: true, check: "scope in ('read', 'write')" }),
 				created_at: column("timestamp", { notNull: true, default: "now()" }),
 				last_used_at: column("timestamp"),
+				client_id: column("bigint", { references: { table: "oauth_clients", column: "id", onDelete: "cascade" } }),
+				expires_at: column("timestamp"),
 			},
 		},
 		hashflags: {
@@ -896,91 +913,550 @@ export const schema: Schema = {
 				following: column("integer", { notNull: true, default: "0" }),
 			},
 		},
+		community_note_appeals: {
+			columns: {
+				note_id: column("bigint", { primaryKey: true, notNull: true, references: { table: "community_notes", column: "id", onDelete: "cascade" } }),
+				author_id: column("bigint", { notNull: true, references: { table: "users", column: "id", onDelete: "cascade" } }),
+				reason: column("text", { notNull: true, check: "length(reason) between 20 and 1000" }),
+				status: column("text", { notNull: true, check: "status in ('open', 'accepted', 'rejected')", default: "'open'" }),
+				created_at: column("timestamp", { notNull: true, default: "now()" }),
+				reviewed_by: column("bigint", { references: { table: "users", column: "id", onDelete: "set null" } }),
+				reviewed_at: column("timestamp"),
+				resolution: column("text"),
+			},
+		},
+		oauth_clients: {
+			columns: {
+				id: column("bigint", { primaryKey: true, notNull: true }),
+				owner_id: column("bigint", { notNull: true, references: { table: "users", column: "id", onDelete: "cascade" } }),
+				name: column("text", { notNull: true, check: "length(name) between 1 and 80" }),
+				redirect_uri: column("text", { notNull: true }),
+				revoked: column("boolean", { notNull: true, default: "false" }),
+				created_at: column("timestamp", { notNull: true, default: "now()" }),
+			},
+		},
+		oauth_codes: {
+			columns: {
+				code_hash: column("text", { primaryKey: true, notNull: true }),
+				client_id: column("bigint", { notNull: true, references: { table: "oauth_clients", column: "id", onDelete: "cascade" } }),
+				user_id: column("bigint", { notNull: true, references: { table: "users", column: "id", onDelete: "cascade" } }),
+				redirect_uri: column("text", { notNull: true }),
+				scope: column("text", { notNull: true, check: "scope in ('read', 'write')" }),
+				code_challenge: column("text", { notNull: true }),
+				expires_at: column("timestamp", { notNull: true }),
+			},
+		},
+		federated_objects: {
+			columns: {
+				instance: column("text", { notNull: true }),
+				kind: column("text", { notNull: true, check: "kind in ('user', 'post', 'media')" }),
+				remote_id: column("bigint", { notNull: true }),
+				local_id: column("bigint", { notNull: true }),
+			},
+			primaryKey: ["instance", "kind", "remote_id"],
+		},
+		federation_outbox: {
+			columns: {
+				seq: column("bigint", { identity: true, primaryKey: true, notNull: true }),
+				kind: column("text", { notNull: true, check: "kind in ('user', 'post', 'like', 'repost', 'follow')" }),
+				a: column("bigint", { notNull: true }),
+				b: column("bigint"),
+				created_at: column("timestamp", { notNull: true, default: "now()" }),
+			},
+		},
+		federation_peers: {
+			columns: {
+				instance: column("text", { primaryKey: true, notNull: true }),
+				cursor: column("bigint", { notNull: true, default: "0" }),
+				key: column("text", {
+					check: "key is null or (length(key) = 43 and length(translate(key, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-', '')) = 0)",
+				}),
+				last_ok_at: column("timestamp"),
+				last_error: column("text"),
+				last_error_at: column("timestamp"),
+			},
+		},
+		federation_blocks: {
+			columns: {
+				instance: column("text", { primaryKey: true, notNull: true }),
+				source: column("text", { notNull: true, check: "source in ('local', 'emergency', 'registry')" }),
+				reason: column("text", { notNull: true, default: "''" }),
+				by_id: column("bigint"),
+				by_name: column("text"),
+				created_at: column("timestamp", { notNull: true, default: "now()" }),
+				kept_local: column("json"),
+			},
+		},
+		federation_state: {
+			columns: {
+				key: column("text", { primaryKey: true, notNull: true }),
+				value: column("json", { notNull: true }),
+				updated_at: column("timestamp", { notNull: true, default: "now()" }),
+			},
+		},
+		federation_emergencies: {
+			columns: {
+				seq: column("bigint", { primaryKey: true, notNull: true }),
+				instance: column("text", { notNull: true }),
+				action: column("text", { notNull: true, check: "action in ('block', 'lift')" }),
+				reason: column("text", { notNull: true, default: "''" }),
+				by_name: column("text", { notNull: true }),
+				issuer: column("text", { notNull: true }),
+				envelope: column("json", { notNull: true }),
+				created_at: column("timestamp", { notNull: true, default: "now()" }),
+			},
+		},
+		superadmin_tickets: {
+			columns: {
+				nonce: column("text", { primaryKey: true, notNull: true }),
+				used_at: column("timestamp", { notNull: true, default: "now()" }),
+			},
+		},
 	},
 	indexes: {
-		users_screen_name_key: { table: "users", expressions: ["lower(screen_name)"], unique: true },
-		posts_replies_idx: { table: "posts", expressions: ["reply_to_id", "user_id"] },
-		posts_user_idx: { table: "posts", expressions: ["user_id", "id desc"] },
-		posts_reply_user_idx: { table: "posts", expressions: ["reply_to_user_id", "created_at"], where: "reply_to_user_id is not null" },
-		user_badges_badge_idx: { table: "user_badges", expressions: ["badge_id"] },
-		users_email_idx: { table: "users", expressions: ["lower(email)"], unique: true },
-		sessions_id_key: { table: "sessions", expressions: ["id"], unique: true },
-		staff_notes_user_idx: { table: "staff_notes", expressions: ["user_id", "id desc"] },
-		staff_notes_actor_idx: { table: "staff_notes", expressions: ["actor_id"] },
-		staff_messages_user_idx: { table: "staff_messages", expressions: ["user_id", "id desc"] },
-		staff_messages_actor_idx: { table: "staff_messages", expressions: ["actor_id"] },
-		moderation_appeals_user_idx: { table: "moderation_appeals", expressions: ["user_id", "id desc"] },
-		moderation_appeals_message_idx: { table: "moderation_appeals", expressions: ["message_id"] },
-		moderation_appeals_reviewer_idx: { table: "moderation_appeals", expressions: ["reviewer_id"] },
-		moderation_appeals_open_user_idx: { table: "moderation_appeals", expressions: ["user_id"], unique: true, where: "status='open'" },
-		users_notes_alias_key: { table: "users", expressions: ["notes_alias"], unique: true },
-		client_platforms_creator_idx: { table: "client_platforms", expressions: ["creator_id"] },
-		community_notes_author_idx: { table: "community_notes", expressions: ["author_id"] },
-		community_note_ratings_user_idx: { table: "community_note_ratings", expressions: ["user_id"] },
-		community_note_requests_user_idx: { table: "community_note_requests", expressions: ["user_id"] },
-		likes_post_user_idx: { table: "likes", expressions: ["post_id", "user_id"] },
-		likes_created_idx: { table: "likes", expressions: ["created_at"] },
-		reposts_post_user_idx: { table: "reposts", expressions: ["post_id", "user_id"] },
-		reposts_created_idx: { table: "reposts", expressions: ["created_at"] },
-		reposts_id_idx: { table: "reposts", expressions: ["id"] },
-		bookmarks_post_idx: { table: "bookmarks", expressions: ["post_id"] },
-		follows_followee_created_idx: { table: "follows", expressions: ["followee_id", "created_at"] },
-		media_post_idx: { table: "media", expressions: ["post_id", "position"] },
-		reposts_user_idx: { table: "reposts", expressions: ["user_id", "id desc"] },
-		posts_top_level_idx: { table: "posts", expressions: ["id"], where: "reply_to_id is null" },
-		articles_user_idx: { table: "articles", expressions: ["user_id", "state", "modified_at desc"] },
-		post_mentions_user_idx: { table: "post_mentions", expressions: ["user_id"] },
-		posts_quotes_idx: { table: "posts", expressions: ["quote_id", "user_id"], where: "quote_id is not null" },
-		blocks_blocked_idx: { table: "blocks", expressions: ["blocked_id"] },
-		muted_keywords_user_word_idx: { table: "muted_keywords", expressions: ["user_id", "lower(keyword)"], unique: true },
-		users_suspended_idx: { table: "users", expressions: ["id"], where: "status = 'suspended'" },
-		audit_log_created_idx: { table: "audit_log", expressions: ["created_at desc"] },
-		affiliations_user_idx: { table: "affiliations", expressions: ["user_id"], unique: true },
-		reports_status_idx: { table: "reports", expressions: ["status", "created_at desc"] },
-		username_changes_user_idx: { table: "username_changes", expressions: ["user_id", "changed_at desc"] },
-		chat_members_user_idx: { table: "chat_members", expressions: ["user_id"] },
-		chat_events_conversation_idx: { table: "chat_events", expressions: ["conversation_id", "kind", "seq desc"] },
-		chat_events_conversation_seq_idx: { table: "chat_events", expressions: ["conversation_id", "seq desc"] },
-		chat_events_sender_kind_idx: { table: "chat_events", expressions: ["conversation_id", "kind", "sender_id", "seq desc"] },
-		chat_events_sender_idx: { table: "chat_events", expressions: ["sender_id"] },
-		chat_events_created_idx: { table: "chat_events", expressions: ["created_at"] },
-		chat_conversations_creator_idx: { table: "chat_conversations", expressions: ["creator_id"] },
-		chat_trust_target_idx: { table: "chat_trust", expressions: ["trusted_id"] },
-		chat_hidden_events_seq_idx: { table: "chat_hidden_events", expressions: ["seq"] },
-		chat_uploads_uploader_idx: { table: "chat_uploads", expressions: ["uploader_id"] },
-		chat_events_audience_idx: { table: "chat_events", expressions: ["audience_id"] },
-		users_org_badge_idx: { table: "users", expressions: ["org_badge_id"] },
-		users_status_until_idx: { table: "users", expressions: ["status_until"], where: "status_until is not null" },
-		lists_owner_idx: { table: "lists", expressions: ["owner_id"] },
-		list_members_user_idx: { table: "list_members", expressions: ["user_id"] },
-		list_subscribers_user_idx: { table: "list_subscribers", expressions: ["user_id"] },
-		communities_name_key: { table: "communities", expressions: ["lower(name)"], unique: true },
-		community_members_user_idx: { table: "community_members", expressions: ["user_id"] },
-		community_rules_community_idx: { table: "community_rules", expressions: ["community_id", "position"] },
-		posts_community_idx: { table: "posts", expressions: ["community_id", "id desc"], where: "community_id is not null" },
-		scheduled_posts_due_idx: { table: "scheduled_posts", expressions: ["execute_at"], where: "kind = 'scheduled'" },
-		scheduled_posts_user_idx: { table: "scheduled_posts", expressions: ["user_id", "kind"] },
-		post_versions_post_idx: { table: "post_versions", expressions: ["post_id", "seq"] },
-		follow_requests_target_idx: { table: "follow_requests", expressions: ["target_id", "created_at desc"] },
-		bookmark_folders_user_idx: { table: "bookmark_folders", expressions: ["user_id", "created_at"] },
-		topics_name_key: { table: "topics", expressions: ["lower(name)"], unique: true },
-		topic_follows_topic_idx: { table: "topic_follows", expressions: ["topic_id"] },
-		topic_not_interested_topic_idx: { table: "topic_not_interested", expressions: ["topic_id"] },
-		post_notifications_target_idx: { table: "post_notifications", expressions: ["target_id"] },
-		contacts_user_idx: { table: "contacts", expressions: ["user_id", "id"] },
-		login_events_user_idx: { table: "login_events", expressions: ["user_id", "created_at desc"] },
-		mail_log_created_idx: { table: "mail_log", expressions: ["created_at desc"] },
-		push_subscriptions_user_idx: { table: "push_subscriptions", expressions: ["user_id"] },
-		email_confirmations_user_idx: { table: "email_confirmations", expressions: ["user_id"] },
-		error_log_last_idx: { table: "error_log", expressions: ["last_at desc"] },
-		affiliation_requests_user_idx: { table: "affiliation_requests", expressions: ["user_id"] },
-		unfollows_followee_idx: { table: "unfollows", expressions: ["followee_id", "created_at"] },
-		post_views_created_idx: { table: "post_views", expressions: ["created_at"] },
-		stickers_pack_idx: { table: "stickers", expressions: ["pack_id", "position"] },
-		api_tokens_user_idx: { table: "api_tokens", expressions: ["user_id"] },
-		delegation_members_member_idx: { table: "delegation_members", expressions: ["member_id"] },
-		login_events_ip_idx: { table: "login_events", expressions: ["ip", "created_at desc"] },
-		media_user_post_idx: { table: "media", expressions: ["user_id", "post_id"], where: "post_id is not null" },
+		users_screen_name_key: {
+			table: "users",
+			expressions: ["lower(screen_name)"],
+			unique: true,
+		},
+		posts_replies_idx: {
+			table: "posts",
+			expressions: ["reply_to_id", "user_id"],
+		},
+		posts_user_idx: {
+			table: "posts",
+			expressions: ["user_id", "id desc"],
+		},
+		posts_reply_user_idx: {
+			table: "posts",
+			expressions: ["reply_to_user_id", "created_at"],
+			where: "reply_to_user_id is not null",
+		},
+		user_badges_badge_idx: {
+			table: "user_badges",
+			expressions: ["badge_id"],
+		},
+		users_email_idx: {
+			table: "users",
+			expressions: ["lower(email)"],
+			unique: true,
+		},
+		sessions_id_key: {
+			table: "sessions",
+			expressions: ["id"],
+			unique: true,
+		},
+		staff_notes_user_idx: {
+			table: "staff_notes",
+			expressions: ["user_id", "id desc"],
+		},
+		staff_notes_actor_idx: {
+			table: "staff_notes",
+			expressions: ["actor_id"],
+		},
+		staff_messages_user_idx: {
+			table: "staff_messages",
+			expressions: ["user_id", "id desc"],
+		},
+		staff_messages_actor_idx: {
+			table: "staff_messages",
+			expressions: ["actor_id"],
+		},
+		moderation_appeals_user_idx: {
+			table: "moderation_appeals",
+			expressions: ["user_id", "id desc"],
+		},
+		moderation_appeals_message_idx: {
+			table: "moderation_appeals",
+			expressions: ["message_id"],
+		},
+		moderation_appeals_reviewer_idx: {
+			table: "moderation_appeals",
+			expressions: ["reviewer_id"],
+		},
+		moderation_appeals_open_user_idx: {
+			table: "moderation_appeals",
+			expressions: ["user_id"],
+			unique: true,
+			where: "status='open'",
+		},
+		users_notes_alias_key: {
+			table: "users",
+			expressions: ["notes_alias"],
+			unique: true,
+		},
+		client_platforms_creator_idx: {
+			table: "client_platforms",
+			expressions: ["creator_id"],
+		},
+		community_notes_author_idx: {
+			table: "community_notes",
+			expressions: ["author_id"],
+		},
+		community_note_ratings_user_idx: {
+			table: "community_note_ratings",
+			expressions: ["user_id"],
+		},
+		community_note_requests_user_idx: {
+			table: "community_note_requests",
+			expressions: ["user_id"],
+		},
+		likes_post_user_idx: {
+			table: "likes",
+			expressions: ["post_id", "user_id"],
+		},
+		likes_created_idx: {
+			table: "likes",
+			expressions: ["created_at"],
+		},
+		reposts_post_user_idx: {
+			table: "reposts",
+			expressions: ["post_id", "user_id"],
+		},
+		reposts_created_idx: {
+			table: "reposts",
+			expressions: ["created_at"],
+		},
+		reposts_id_idx: {
+			table: "reposts",
+			expressions: ["id"],
+		},
+		bookmarks_post_idx: {
+			table: "bookmarks",
+			expressions: ["post_id"],
+		},
+		follows_followee_created_idx: {
+			table: "follows",
+			expressions: ["followee_id", "created_at"],
+		},
+		media_post_idx: {
+			table: "media",
+			expressions: ["post_id", "position"],
+		},
+		reposts_user_idx: {
+			table: "reposts",
+			expressions: ["user_id", "id desc"],
+		},
+		posts_top_level_idx: {
+			table: "posts",
+			expressions: ["id"],
+			where: "reply_to_id is null",
+		},
+		articles_user_idx: {
+			table: "articles",
+			expressions: ["user_id", "state", "modified_at desc"],
+		},
+		post_mentions_user_idx: {
+			table: "post_mentions",
+			expressions: ["user_id"],
+		},
+		posts_quotes_idx: {
+			table: "posts",
+			expressions: ["quote_id", "user_id"],
+			where: "quote_id is not null",
+		},
+		blocks_blocked_idx: {
+			table: "blocks",
+			expressions: ["blocked_id"],
+		},
+		muted_keywords_user_word_idx: {
+			table: "muted_keywords",
+			expressions: ["user_id", "lower(keyword)"],
+			unique: true,
+		},
+		users_suspended_idx: {
+			table: "users",
+			expressions: ["id"],
+			where: "status = 'suspended'",
+		},
+		audit_log_created_idx: {
+			table: "audit_log",
+			expressions: ["created_at desc"],
+		},
+		reports_status_idx: {
+			table: "reports",
+			expressions: ["status", "created_at desc"],
+		},
+		username_changes_user_idx: {
+			table: "username_changes",
+			expressions: ["user_id", "changed_at desc"],
+		},
+		chat_members_user_idx: {
+			table: "chat_members",
+			expressions: ["user_id"],
+		},
+		chat_events_conversation_idx: {
+			table: "chat_events",
+			expressions: ["conversation_id", "kind", "seq desc"],
+		},
+		chat_events_conversation_seq_idx: {
+			table: "chat_events",
+			expressions: ["conversation_id", "seq desc"],
+		},
+		chat_events_sender_kind_idx: {
+			table: "chat_events",
+			expressions: ["conversation_id", "kind", "sender_id", "seq desc"],
+		},
+		chat_events_sender_idx: {
+			table: "chat_events",
+			expressions: ["sender_id"],
+		},
+		chat_events_created_idx: {
+			table: "chat_events",
+			expressions: ["created_at"],
+		},
+		chat_conversations_creator_idx: {
+			table: "chat_conversations",
+			expressions: ["creator_id"],
+		},
+		chat_trust_target_idx: {
+			table: "chat_trust",
+			expressions: ["trusted_id"],
+		},
+		chat_hidden_events_seq_idx: {
+			table: "chat_hidden_events",
+			expressions: ["seq"],
+		},
+		chat_uploads_uploader_idx: {
+			table: "chat_uploads",
+			expressions: ["uploader_id"],
+		},
+		chat_events_audience_idx: {
+			table: "chat_events",
+			expressions: ["audience_id"],
+		},
+		users_org_badge_idx: {
+			table: "users",
+			expressions: ["org_badge_id"],
+		},
+		users_status_until_idx: {
+			table: "users",
+			expressions: ["status_until"],
+			where: "status_until is not null",
+		},
+		lists_owner_idx: {
+			table: "lists",
+			expressions: ["owner_id"],
+		},
+		list_members_user_idx: {
+			table: "list_members",
+			expressions: ["user_id"],
+		},
+		list_subscribers_user_idx: {
+			table: "list_subscribers",
+			expressions: ["user_id"],
+		},
+		communities_name_key: {
+			table: "communities",
+			expressions: ["lower(name)"],
+			unique: true,
+		},
+		community_members_user_idx: {
+			table: "community_members",
+			expressions: ["user_id"],
+		},
+		community_rules_community_idx: {
+			table: "community_rules",
+			expressions: ["community_id", "position"],
+		},
+		posts_community_idx: {
+			table: "posts",
+			expressions: ["community_id", "id desc"],
+			where: "community_id is not null",
+		},
+		scheduled_posts_due_idx: {
+			table: "scheduled_posts",
+			expressions: ["execute_at"],
+			where: "kind = 'scheduled'",
+		},
+		scheduled_posts_user_idx: {
+			table: "scheduled_posts",
+			expressions: ["user_id", "kind"],
+		},
+		post_versions_post_idx: {
+			table: "post_versions",
+			expressions: ["post_id", "seq"],
+		},
+		follow_requests_target_idx: {
+			table: "follow_requests",
+			expressions: ["target_id", "created_at desc"],
+		},
+		bookmark_folders_user_idx: {
+			table: "bookmark_folders",
+			expressions: ["user_id", "created_at"],
+		},
+		topics_name_key: {
+			table: "topics",
+			expressions: ["lower(name)"],
+			unique: true,
+		},
+		topic_follows_topic_idx: {
+			table: "topic_follows",
+			expressions: ["topic_id"],
+		},
+		topic_not_interested_topic_idx: {
+			table: "topic_not_interested",
+			expressions: ["topic_id"],
+		},
+		post_notifications_target_idx: {
+			table: "post_notifications",
+			expressions: ["target_id"],
+		},
+		contacts_user_idx: {
+			table: "contacts",
+			expressions: ["user_id", "id"],
+		},
+		login_events_user_idx: {
+			table: "login_events",
+			expressions: ["user_id", "created_at desc"],
+		},
+		mail_log_created_idx: {
+			table: "mail_log",
+			expressions: ["created_at desc"],
+		},
+		push_subscriptions_user_idx: {
+			table: "push_subscriptions",
+			expressions: ["user_id"],
+		},
+		email_confirmations_user_idx: {
+			table: "email_confirmations",
+			expressions: ["user_id"],
+		},
+		error_log_last_idx: {
+			table: "error_log",
+			expressions: ["last_at desc"],
+		},
+		affiliation_requests_user_idx: {
+			table: "affiliation_requests",
+			expressions: ["user_id"],
+		},
+		unfollows_followee_idx: {
+			table: "unfollows",
+			expressions: ["followee_id", "created_at"],
+		},
+		post_views_created_idx: {
+			table: "post_views",
+			expressions: ["created_at"],
+		},
+		stickers_pack_idx: {
+			table: "stickers",
+			expressions: ["pack_id", "position"],
+		},
+		api_tokens_user_idx: {
+			table: "api_tokens",
+			expressions: ["user_id"],
+		},
+		delegation_members_member_idx: {
+			table: "delegation_members",
+			expressions: ["member_id"],
+		},
+		login_events_ip_idx: {
+			table: "login_events",
+			expressions: ["ip", "created_at desc"],
+		},
+		media_user_post_idx: {
+			table: "media",
+			expressions: ["user_id", "post_id"],
+			where: "post_id is not null",
+		},
+		posts_created_idx: {
+			table: "posts",
+			expressions: ["created_at"],
+		},
+		community_note_appeals_open_idx: {
+			table: "community_note_appeals",
+			expressions: ["created_at"],
+			where: "status = 'open'",
+		},
+		media_user_idx: {
+			table: "media",
+			expressions: ["user_id", "id"],
+		},
+		affiliations_user_created_idx: {
+			table: "affiliations",
+			expressions: ["user_id", "created_at"],
+		},
+		polls_user_idx: {
+			table: "polls",
+			expressions: ["user_id", "id"],
+		},
+		poll_votes_user_idx: {
+			table: "poll_votes",
+			expressions: ["user_id", "created_at", "poll_id"],
+		},
+		posts_poll_idx: {
+			table: "posts",
+			expressions: ["poll_id"],
+			where: "poll_id is not null",
+		},
+		bookmark_folder_posts_page_idx: {
+			table: "bookmark_folder_posts",
+			expressions: ["folder_id", "created_at desc", "post_id desc"],
+		},
+		oauth_clients_owner_idx: {
+			table: "oauth_clients",
+			expressions: ["owner_id"],
+		},
+		oauth_codes_expires_idx: {
+			table: "oauth_codes",
+			expressions: ["expires_at"],
+		},
+		api_tokens_client_idx: {
+			table: "api_tokens",
+			expressions: ["client_id", "user_id"],
+			where: "client_id is not null",
+		},
+		posts_hidden_replies_idx: {
+			table: "posts",
+			expressions: ["conversation_id"],
+			where: "reply_hidden_at is not null",
+		},
+		users_remote_idx: {
+			table: "users",
+			expressions: ["instance", "remote_id"],
+			unique: true,
+			where: "instance is not null",
+		},
+		federated_objects_local_idx: {
+			table: "federated_objects",
+			expressions: ["kind", "local_id"],
+			unique: true,
+		},
+		federation_outbox_created_idx: {
+			table: "federation_outbox",
+			expressions: ["created_at"],
+		},
+		users_handle_trgm_idx: {
+			table: "users",
+			expressions: ["screen_name gin_trgm_ops"],
+			using: "gin",
+			dialects: ["postgres"],
+		},
+		users_name_trgm_idx: {
+			table: "users",
+			expressions: ["name gin_trgm_ops"],
+			using: "gin",
+			dialects: ["postgres"],
+		},
+		users_bio_trgm_idx: {
+			table: "users",
+			expressions: ["bio gin_trgm_ops"],
+			using: "gin",
+			dialects: ["postgres"],
+		},
+		posts_text_trgm_idx: {
+			table: "posts",
+			expressions: ["text gin_trgm_ops"],
+			using: "gin",
+			dialects: ["postgres"],
+		},
+		polls_choice_media_idx: {
+			table: "polls",
+			expressions: ["choice_media"],
+			using: "gin",
+			dialects: ["postgres"],
+			where: "choice_media is not null",
+		},
 	},
 	views: {
 		feed_items: {

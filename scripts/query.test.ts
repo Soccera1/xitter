@@ -18,6 +18,42 @@ async function connection(backend: "sqlite" | "postgres"): Promise<QuerySQL> {
 }
 for (const backend of ["sqlite", "postgres"] as const) {
 	const run = backend === "postgres" && !process.env.TEST_POSTGRES_URL ? test.skip : test;
+	run(`${backend}: upstream JSON, export and locking primitives agree`, async () => {
+		const sql = await connection(backend);
+		try {
+			const array = sql.cast('["one","two"]', "jsonb");
+			const [row] = await sql`select
+				${sql.project(sql.jsonHas(array, "two"), "has", "boolean")},
+				${sql.project(sql.jsonHas(array, "absent"), "missing", "boolean")},
+				${sql.project(sql.jsonType(array), "kind", "text")},
+				${sql.project(sql.jsonLength(array), "size", "number")},
+				${sql.project(sql.iso(sql.cast(new Date("2020-01-02T03:04:05.006Z"), "timestamptz")), "iso", "text")},
+				${sql.project(sql.hash(Buffer.from("abc")), "hash", "text")},
+				${sql.project(sql.byteLength(Buffer.from([0, 128, 255])), "bytes", "number")},
+				${sql.project(sql.jsonObject("nested", sql.jsonValue(array), "flag", false), "document", "json")}`;
+			expect(row).toEqual({
+				has: true,
+				missing: false,
+				kind: "array",
+				size: 2,
+				iso: "2020-01-02T03:04:05.006Z",
+				hash: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+				bytes: 3,
+				document: { nested: ["one", "two"], flag: false },
+			});
+			await sql.begin(async (tx) => {
+				await tx`select ${tx.advisoryLock("xitter-query-contract")}`;
+				await tx.temporary("upstream_contract", tx`value text`);
+				await tx`insert into upstream_contract values ('one'), ('two')`;
+				const [values] = await tx`select ${tx.stringAgg(tx`value`, ", ", tx`value desc`)} as joined from upstream_contract`;
+				expect(values.joined).toBe("two, one");
+				await tx`select value from upstream_contract ${tx.lock(false, ["upstream_contract"])}`;
+				await tx`drop table upstream_contract`;
+			});
+		} finally {
+			await sql.close();
+		}
+	});
 	run(`${backend}: scalar and nested JSON values are decoded exactly once`, async () => {
 		const sql = await connection(backend);
 		try {

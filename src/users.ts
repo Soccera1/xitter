@@ -1,8 +1,9 @@
 import type { Fragment } from "./db/query";
 import type { User } from "./auth";
-import { blockedFor, isBlockedEitherWay, mutedFor, outOfView } from "./blocks";
+import { blockedFor, federatedHiddenFor, isBlockedEitherWay, mutedFor, outOfView } from "./blocks";
 import { staffViewer } from "./staff-access";
 import { sql } from "./db";
+import { INSTANCE_ID } from "./federation";
 
 // an account's custom badges in order, as a json list of { id, name }
 export const badgesOf = (userId: Fragment) => sql`(select ${sql.jsonAgg(sql.jsonObject(sql`'id'`, sql.cast(sql`b.id`, "text"), sql`'name'`, sql`b.name`), sql`ub.position, b.name`)}
@@ -16,20 +17,22 @@ const stat = (name: string) => sql`coalesce((select s.${sql(name)} from user_sta
 // same account never reaches the client in two different states.
 export const userCols = (viewerId: string) => sql`
 	u.id as a_id, u.screen_name as a_screen_name, u.name as a_name, u.bio as a_bio, u.location as a_location,
-	u.website as a_website, u.avatar_url as a_avatar_url, u.banner_url as a_banner_url, u.pinned_post_id as a_pinned_post_id, u.protected as a_protected, u.verified_type as a_verified_type, u.verified_at as a_verified_at, u.translator as a_translator, u.flag as a_flag, u.status as a_status, u.created_at as a_created_at,
-	${badgesOf(sql`u.id`)} as a_badges,
-	${stat("posts")} as a_posts,
+	u.website as a_website, u.avatar_url as a_avatar_url, u.banner_url as a_banner_url, u.pinned_post_id as a_pinned_post_id, u.protected as a_protected, u.verified_type as a_verified_type, u.verified_at as a_verified_at, u.translator as a_translator, u.flag as a_flag, u.status as a_status, u.instance as a_instance, u.created_at as a_created_at,
+	${badgesOf(sql`u.id`)} as a_badges, u.remote_badges as a_remote_badges,
+	${sql.greatest(sql.cast(sql`(${sql.jsonGet(sql`u.remote_counts`, sql`'posts'`, true)})`, "int"), stat("posts"))} as a_posts,
 	(select ${sql.jsonObject(sql`'id'`, sql.cast(sql`o.id`, "text"), sql`'name'`, sql`o.name`, sql`'screen_name'`, sql`o.screen_name`, sql`'avatar_url'`, sql`case when o . org_badge_id is not null then '/public/badge-' || ${sql.cast(sql`o.org_badge_id`, "text")} || '.png' else o . avatar_url end`, sql`'since'`, sql`af.created_at`)}
-		from affiliations af join users o on o.id = af.org_id where af.user_id = u.id) as a_org,
+		from affiliations af join users o on o.id = af.org_id where af.user_id = u.id order by af.created_at, af.org_id limit 1) as a_org,
+	${sql.project(sql`(select ${sql.jsonAgg(sql.jsonObject(sql`'id'`, sql.cast(sql`o.id`, "text"), sql`'name'`, sql`o.name`, sql`'screen_name'`, sql`o.screen_name`, sql`'avatar_url'`, sql`case when o . org_badge_id is not null then '/public/badge-' || ${sql.cast(sql`o.org_badge_id`, "text")} || '.png' else o . avatar_url end`), sql`af.created_at, af.org_id`)}
+		from affiliations af join users o on o.id = af.org_id where af.user_id = u.id and af.org_id <> (select x.org_id from affiliations x where x.user_id = u.id order by x.created_at, x.org_id limit 1))`, "a_more_orgs", "json")},
 	(select ${sql.cast(sql`count(*)`, "int")} from affiliations af where af.org_id = u.id) as a_affiliates,
 	(select m.screen_name from users m where m.id = u.automated_by) as a_automated_by, u.parody_label as a_parody_label,
 	(select ${sql.jsonObject(sql`'text'`, sql`l.text`, sql`'badge_id'`, sql.cast(sql`l.badge_id`, "text"), sql`'url'`, sql`l.url`)} from account_labels l where l.id = u.label_id) as a_label,
 	${stat("media_posts")} as a_media_posts,
-	${stat("likes")} as a_likes,
+	${sql.greatest(sql.cast(sql`(${sql.jsonGet(sql`u.remote_counts`, sql`'likes'`, true)})`, "int"), stat("likes"))} as a_likes,
 	${stat("highlights")} as a_highlights,
 	${stat("articles")} as a_articles,
-	coalesce(${sql.cast(sql`(${sql.jsonGet(sql`u.count_overrides`, sql`'followers'`, true)})`, "int")}, ${stat("followers")}) as a_followers,
-	coalesce(${sql.cast(sql`(${sql.jsonGet(sql`u.count_overrides`, sql`'following'`, true)})`, "int")}, ${stat("following")}) as a_following,
+	coalesce(${sql.cast(sql`(${sql.jsonGet(sql`u.count_overrides`, sql`'followers'`, true)})`, "int")}, ${sql.greatest(sql.cast(sql`(${sql.jsonGet(sql`u.remote_counts`, sql`'followers'`, true)})`, "int"), stat("followers"))}) as a_followers,
+	coalesce(${sql.cast(sql`(${sql.jsonGet(sql`u.count_overrides`, sql`'following'`, true)})`, "int")}, ${sql.greatest(sql.cast(sql`(${sql.jsonGet(sql`u.remote_counts`, sql`'following'`, true)})`, "int"), stat("following"))}) as a_following,
 	exists (select 1 from follows x where x.follower_id = ${sql.cast(viewerId, "bigint")} and x.followee_id = u.id) as a_followed_by_viewer,
 	exists (select 1 from follows x where x.follower_id = u.id and x.followee_id = ${sql.cast(viewerId, "bigint")}) as a_follows_viewer,
 	exists (select 1 from follow_requests x where x.requester_id = ${sql.cast(viewerId, "bigint")} and x.target_id = u.id) as a_requested,
@@ -56,12 +59,15 @@ export function toUser(r: any): User {
 		translator: r.a_translator ?? null,
 		flag: r.a_flag,
 		badges: r.a_badges ?? [],
+		remote_badges: r.a_remote_badges ?? [],
 		status: r.a_status,
 		org: r.a_org ?? null,
+		more_orgs: r.a_more_orgs ?? [],
 		affiliates: r.a_affiliates,
 		automated_by: r.a_automated_by ?? null,
 		parody_label: r.a_parody_label ?? "None",
 		label: r.a_label ?? null,
+		instance: r.a_instance ?? null,
 		created_at: r.a_created_at,
 		stats: {
 			posts: r.a_posts,
@@ -83,13 +89,15 @@ export function toUser(r: any): User {
 	};
 }
 
+export const localName = (name: string) => (name.toLowerCase().endsWith(`@${INSTANCE_ID}`) ? name.slice(0, -INSTANCE_ID.length - 1) : name);
+
 export async function userByName(viewerId: string, screenName: string): Promise<User | undefined> {
-	const rows = await sql`select ${userCols(viewerId)} from users u where lower(u.screen_name) = lower(${screenName})`;
+	const rows = await sql`select ${userCols(viewerId)} from users u where lower(u.screen_name) = lower(${localName(screenName)}) and not u.instance_blocked`;
 	return rows[0] && toUser(rows[0]);
 }
 
 export async function userById(viewerId: string, id: string): Promise<User | undefined> {
-	const rows = await sql`select ${userCols(viewerId)} from users u where u.id = ${sql.cast(id, "bigint")}`;
+	const rows = await sql`select ${userCols(viewerId)} from users u where u.id = ${sql.cast(id, "bigint")} and not u.instance_blocked`;
 	return rows[0] && toUser(rows[0]);
 }
 
@@ -143,9 +151,9 @@ export async function setProtected(userId: string, on: boolean): Promise<void> {
 export async function followList(viewerId: string, userId: string, kind: "following" | "followers" | "verified_followers", limit = 200): Promise<User[]> {
 	// a protected account's lists are for itself and its followers
 	if (userId !== viewerId) {
-		const [hidden] = await sql`select 1 from users u where u.id = ${sql.cast(userId, "bigint")} and u.protected
-			and not exists (select 1 from follows f where f.follower_id = ${sql.cast(viewerId, "bigint")} and f.followee_id = u.id)
-			and not ${staffViewer(viewerId)}`;
+		const [hidden] = await sql`select 1 from users u where u.id = ${sql.cast(userId, "bigint")} and not ${staffViewer(viewerId)} and (
+			(u.protected and not exists (select 1 from follows f where f.follower_id = ${sql.cast(viewerId, "bigint")} and f.followee_id = u.id))
+			or exists (select 1 from blocks b where b.blocker_id = u.id and b.blocked_id = ${sql.cast(viewerId, "bigint")}))`;
 		if (hidden) return [];
 	}
 	const rows =
@@ -181,6 +189,7 @@ export async function suggestedUsers(viewerId: string, limit = 20, exclude: stri
 		where u.id <> ${sql.cast(viewerId, "bigint")} and u.status = 'active'
 			and u.id not in (select followee_id from follows where follower_id = ${sql.cast(viewerId, "bigint")})
 			and u.id not in ${blockedFor(viewerId)} and u.id not in ${mutedFor(viewerId)} and u.id not in ${outOfView(viewerId)}
+			and u.id not in ${federatedHiddenFor(viewerId)}
 			${exclude.length ? sql`and not ${sql.contains(sql.array(exclude, "INT8"), sql`u.id`)}` : sql``}
 			${similarTo ? sql`and u.id <> ${sql.cast(similarTo, "bigint")}` : sql``}
 		order by exists (select 1 from contacts c where c.user_id = ${sql.cast(viewerId, "bigint")} and ${sql.contains(sql`c.emails`, sql`lower(u.email)`)}

@@ -146,6 +146,13 @@ export function createSQL(driver: Driver, dialect: Dialect) {
 		const entries = Object.entries(record);
 		return sql`(${join(entries.map(([name]) => sql(name)))}) values (${join(entries.map(([, item]) => expr(item)))})`;
 	};
+	sql.insertMany = (records: Record<string, any>[]) => {
+		if (!records.length) throw new Error("Bulk inserts require at least one row");
+		const names = Object.keys(records[0]);
+		if (records.some((record) => Object.keys(record).length !== names.length || names.some((name) => !Object.hasOwn(record, name))))
+			throw new Error("Bulk insert rows must have identical columns");
+		return sql`(${join(names.map((name) => sql(name)))}) values ${join(records.map((record) => sql`(${join(names.map((name) => expr(record[name])))})`))}`;
+	};
 	// Escape hatch for trusted, already-native SQL (migrations and diagnostics).
 	// Ordinary application queries use templates and the operations below.
 	sql.unsafe = (text: string, values: any[] = []) => {
@@ -154,6 +161,7 @@ export function createSQL(driver: Driver, dialect: Dialect) {
 	};
 	sql.begin = <T>(callback: (tx: ReturnType<typeof createSQL>) => Promise<T>): Promise<T> =>
 		driver.begin((transaction) => callback(createSQL(transaction, dialect)));
+	sql.savepoint = sql.begin;
 	sql.close = () => driver.close();
 	sql.end = sql.close;
 	sql.cast = (input: any, type: CastType): Fragment => {
@@ -302,7 +310,27 @@ export function createSQL(driver: Driver, dialect: Dialect) {
 	sql.greatest = (...args: any[]) => choose(sql`greatest(${join(args)})`, extremum(args, "max"));
 	sql.least = (...args: any[]) => choose(sql`least(${join(args)})`, extremum(args, "min"));
 	sql.position = (needle: any, haystack: any) => choose(sql`position(${needle} in ${haystack})`, sql`instr(${haystack}, ${needle})`);
-	sql.lock = (skipLocked = false) => choose(raw(skipLocked ? "for update skip locked" : "for update"), raw(""));
+	// SQLite transactions already hold the single writer lock across processes.
+	sql.advisoryLock = (key: string) => choose(sql`pg_advisory_xact_lock(hashtextextended(${key}, 0))`, raw("1"));
+	sql.clock = () => choose(raw("clock_timestamp()"), raw("now()"), "date");
+	sql.jsonHas = (input: any, key: any) => choose(sql`(${input} ? ${key})`, sql`json_has(${input}, ${key})`, "boolean");
+	sql.jsonType = (input: any) => choose(sql`jsonb_typeof(${input})`, sql`json_type_pg(${input})`, "text");
+	sql.jsonLength = (input: any) => choose(sql`jsonb_array_length(${input})`, sql`json_array_length(${input})`, "number");
+	sql.jsonValue = (input: any) => choose(sql`to_jsonb(${input})`, sql`json(${input})`, "json");
+	sql.cardinality = (input: any) => choose(sql`cardinality(${input})`, sql`json_array_length(${input})`, "number");
+	sql.stringAgg = (input: any, separator: string, order?: Fragment) =>
+		choose(
+			sql`string_agg(${input}, ${separator}${order ? sql` order by ${order}` : raw("")})`,
+			sql`group_concat(${input}, ${separator}${order ? sql` order by ${order}` : raw("")})`,
+			"text",
+		);
+	sql.iso = (input: any) => choose(sql`to_char(${input} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`, sql`iso_timestamp(${input})`, "text");
+	sql.hash = (input: any) => choose(sql`encode(sha256(${input}), 'hex')`, sql`sha256_hex(${input})`, "text");
+	sql.byteLength = (input: any) => choose(sql`octet_length(${input})`, sql`length(${input})`, "number");
+	sql.temporary = (name: string, columns: Fragment) =>
+		choose(sql`create temporary table ${sql(name)} (${columns}) on commit drop`, sql`create temporary table ${sql(name)} (${columns})`);
+	sql.lock = (skipLocked = false, tables: string[] = []) =>
+		choose(sql`for update${tables.length ? sql` of ${join(tables.map((name) => sql(name)))}` : raw("")}${raw(skipLocked ? " skip locked" : "")}`, raw(""));
 	sql.each = (array: any) =>
 		choose(sql`lateral (select value, n - 1 as key from unnest(${array}) with ordinality as elements(value, n))`, sql`json_each(${array})`);
 	sql.regexMatches = (input: any, pattern: any) =>

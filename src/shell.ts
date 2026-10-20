@@ -10,11 +10,14 @@ import { FORGOT_SCRIPT, FRESH_SCRIPT, type MenuLink, TIDY_SCRIPT, hideCss, tidyD
 import { POST_CONTEXT_SCRIPT } from "./post-context";
 import { ERROR_SCRIPT } from "./errors";
 import { BADGES_SCRIPT } from "./badges";
+import { DECOR_SCRIPT } from "./decor";
+import { DECORATIONS_SCRIPT } from "./decorations";
 import { NOTICE_SCRIPT } from "./automod-notice";
 import { FLAG_PICKER_CSS, FLAG_PICKER_SCRIPT, flagPickerData } from "./flag-picker";
 import { PUBLIC_ORIGIN } from "./config";
 import { legacyUser } from "./model";
 import { patchText } from "./patch";
+import { PWA_SCRIPT, pwaHead } from "./pwa";
 
 // account settings as the client expects them
 export function settingsFor(user: User): Record<string, unknown> {
@@ -80,6 +83,9 @@ const DARK = 'html[style*="color-scheme: dark"]';
 const WIDE = "html[data-wide-nav]";
 // the X drawn at the top of the sign-in dialog, known by its path
 const DIALOG_LOGO = '[role="dialog"] span:has(> svg > path[d^="M21.742 21.75l-7.563-11.179"])';
+// the X anywhere else: the phone layout's top bar, the loading screen
+// (the top bar wraps the path in a <g>, so not only direct children)
+const MARK = 'svg:has(path[d^="M21.742 21.75l-7.563-11.179"])';
 // the big X beside the signed-out home page's sign-in form
 const HERO = 'main div:has(> svg > path[d^="M285.38 207.711"])';
 // X's code field is sized for 6 boxes; the 8-digit invite code's boxes share the width
@@ -92,6 +98,9 @@ ${DARK}[data-wide-nav] ${LOGO}{background-image:url(/public/logo-dark.png)}
 ${DIALOG_LOGO}{background:url(/public/icon-light.png) center/contain no-repeat}
 ${DARK} ${DIALOG_LOGO}{background-image:url(/public/icon-dark.png)}
 ${DIALOG_LOGO} svg{opacity:0}
+${MARK}{background:url(/public/icon-light.png) center/contain no-repeat}
+${DARK} ${MARK}{background-image:url(/public/icon-dark.png)}
+${MARK} path{opacity:0}
 ${HERO}{background:url(/public/logo-light.png) center/min(100%,391px) auto no-repeat}
 ${DARK} ${HERO}{background-image:url(/public/logo-dark.png)}
 ${HERO} svg{opacity:0}
@@ -264,8 +273,10 @@ export function shell(user: User | null, multi = false, inCommunity = false, edu
 	return `<!DOCTYPE html><html dir="ltr" lang="en"><head><meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=0,viewport-fit=cover" />
 <meta name="theme-color" content="#000000" /><title>${esc(settings().instance_name)}</title>
-<link rel="icon" type="image/png" href="/public/favicon.png" /><link rel="apple-touch-icon" href="/public/icon-light.png" />
-<style>html,body{height:100%}body{margin:0;background-color:#000}${LOGO_CSS}
+<link rel="icon" type="image/png" href="/public/favicon.png" />${pwaHead()}
+<style>html,body{height:100%}body{margin:0;background-color:#000}
+html{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%}
+@media (display-mode:standalone){body{overscroll-behavior-y:none}}${LOGO_CSS}
 ${hideCss()}
 ${FLAG_PICKER_CSS}
 ${STICKER_PICKER_CSS}</style>
@@ -280,7 +291,10 @@ ${FLAG_PICKER_SCRIPT}
 ${user ? STICKER_PICKER_SCRIPT : ""}
 ${POST_CONTEXT_SCRIPT}
 ${BADGES_SCRIPT}
-${user ? NOTICE_SCRIPT : ""}</script>
+${user ? DECOR_SCRIPT : ""}
+${DECORATIONS_SCRIPT}
+${user ? NOTICE_SCRIPT : ""}
+${PWA_SCRIPT}</script>
 <script id="nonce-csp"></script>
 <script>${runtimePatched.text}</script>
 ${scripts}

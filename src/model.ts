@@ -3,15 +3,16 @@
 
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { urlEntities as linkEntities } from "./links";
+import { bioEntities, urlEntities as linkEntities } from "./links";
 import type { User } from "./auth";
 import { CLIENT_DIR } from "./client-cache";
 import { PUBLIC_ORIGIN } from "./config";
 import type { ArticleEntity } from "./articles";
-import { FLAGS } from "./flags";
+import { FLAGS, flagList } from "./flags";
+import { homeOf, mentionsIn } from "./mentions";
 import { type MediaRow, absolute, mediaEntity } from "./media";
 import { placeById } from "./places";
-import { webSource } from "./platforms";
+import { shownSource } from "./platforms";
 import { settings } from "./settings";
 import { SHORT_POST, previewOf, weightedLength } from "./textlen";
 
@@ -101,13 +102,18 @@ function urlEntities(u: User) {
 type Badge = { url: string; description: string; org?: string };
 
 // Everything an account wears after its name, in order: its organisation's
-// badge, its custom badges, its pride flag. X has one slot for it, which gets
+// badge, its custom badges, its pride flag, and a globe for an account from
+// another instance. X has one slot for it, which gets
 // the first; the page script (badges.ts) draws the others after that one.
 export function badgeList(u: User): Badge[] {
 	const out: Badge[] = [];
-	if (u.org) out.push({ url: absolute(u.org.avatar_url) ?? DEFAULT_AVATAR, description: u.org.name, org: u.org.screen_name });
+	for (const o of [u.org, ...(u.more_orgs ?? [])]) if (o) out.push({ url: absolute(o.avatar_url) ?? DEFAULT_AVATAR, description: o.name, org: o.screen_name });
 	for (const b of u.badges ?? []) out.push({ url: `${PUBLIC_ORIGIN}/public/badge-${b.id}.png`, description: b.name });
-	if (u.flag && FLAGS[u.flag]) out.push({ url: `${PUBLIC_ORIGIN}/public/flag-${u.flag}.svg`, description: `${FLAGS[u.flag].name} flag` });
+	for (const b of u.remote_badges ?? []) out.push({ url: b.url, description: b.name });
+	for (const f of flagList(u.flag)) out.push({ url: `${PUBLIC_ORIGIN}/public/flag-${f}.svg`, description: `${FLAGS[f].name} flag` });
+	// an account from another instance, last so its own badges keep their place
+	// the address names the instance, for the card the page script opens on a click (badges.ts)
+	if (u.instance) out.push({ url: `${PUBLIC_ORIGIN}/public/globe.svg?from=${encodeURIComponent(u.instance)}`, description: `From ${u.instance}` });
 	return out;
 }
 
@@ -186,7 +192,7 @@ export function userResult(u: User) {
 		__typename: "User",
 		action_counts: { favorites_count: u.stats?.likes ?? 0 },
 		affiliates_highlighted_label: badgeLabel(u),
-		...(u.verified_type === "business" || u.verified_type === "government" ? { business_account: { affiliates_count: u.affiliates ?? 0 } } : {}),
+		...(u.verified_type === "business" || u.verified_type === "government" || u.affiliates ? { business_account: { affiliates_count: u.affiliates ?? 0 } } : {}),
 		avatar: { image_url: absolute(u.avatar_url) ?? DEFAULT_AVATAR },
 		...(u.banner_url ? { banner: { image_url: absolute(u.banner_url) } } : {}),
 		core: { created_at: apiDate(u.created_at), name: u.name, screen_name: u.screen_name },
@@ -203,7 +209,7 @@ export function userResult(u: User) {
 		pinned_items: u.pinned_post_id ? { tweet_ids_str: [u.pinned_post_id] } : {},
 		possibly_sensitive: false,
 		privacy: { protected: !!u.protected },
-		profile_bio: { description: u.bio, entities: { description: {}, ...urlEntities(u) } },
+		profile_bio: { description: u.bio, entities: { description: { urls: bioEntities(u.bio ?? ""), user_mentions: bioMentions(u) }, ...urlEntities(u) } },
 		profile_image_shape: pictureShape(u),
 		profile_metadata: { profile_interstitial_type: "" },
 		profile_translation: { translator_type: translatorType(u), translator_type_enum: { badged: "Badged", moderator: "Moderator", none: "None" }[translatorType(u)] },
@@ -243,7 +249,7 @@ export function legacyUser(u: User) {
 		notifications: !!u.stats?.notifying,
 		want_retweets: !u.stats?.repostsMuted,
 		possibly_sensitive: false,
-		entities: { description: {}, ...urlEntities(u) },
+		entities: { description: { urls: bioEntities(u.bio ?? ""), user_mentions: bioMentions(u) }, ...urlEntities(u) },
 		profile_image_shape: pictureShape(u),
 		profile_interstitial_type: "",
 		is_translator: translatorType(u) !== "none",
@@ -299,6 +305,7 @@ export type PostRow = {
 	source?: string;
 	communityNote?: { id: string; text: string };
 	sensitive?: boolean;
+	never_sensitive?: boolean;
 	reply_user_id: string | null;
 	reply_screen_name: string | null;
 	like_count: number;
@@ -340,6 +347,8 @@ export type PostRow = {
 	article?: ArticleEntity;
 	// the post this one quotes, when it still exists
 	quoted?: PostRow;
+	// links in the text to posts that have a page here
+	localLinks?: Map<string, string>;
 };
 
 const EDIT_WINDOW_MS = 60 * 60 * 1000;
@@ -365,15 +374,14 @@ const permalink = (p: PostRow) => `${PUBLIC_ORIGIN}/${p.author.screen_name}/stat
 function userMentions(p: PostRow) {
 	if (!p.mentions?.length) return [];
 	const byName = new Map(p.mentions.map((m) => [m.screen_name.toLowerCase(), m]));
-	const out = [];
-	for (const m of p.text.matchAll(/(?<![\w@])@(\w{1,15})/g)) {
-		const user = byName.get(m[1].toLowerCase());
-		if (!user) continue;
-		const start = [...p.text.slice(0, m.index)].length;
-		out.push({ id_str: user.id, indices: [start, start + 1 + m[1].length], name: user.name, screen_name: user.screen_name });
-	}
-	return out;
+	return mentionsIn(p.text, homeOf(p.author.screen_name)).flatMap(({ key, start, end }) => {
+		const user = byName.get(key);
+		return user ? [{ id_str: user.id, indices: [start, end], name: user.name, screen_name: user.screen_name }] : [];
+	});
 }
+
+const bioMentions = (u: User) =>
+	mentionsIn(u.bio ?? "", homeOf(u.screen_name)).map(({ key, start, end }) => ({ id_str: "", indices: [start, end], screen_name: key }));
 
 // #tags in the text; the client links each to a search for it
 function hashtags(text: string) {
@@ -447,7 +455,7 @@ function plainTweet(p: PostRow, withTypename: boolean): Record<string, unknown> 
 	const allTags = hashtags(p.text);
 	const mentions = allMentions.filter((m: any) => m.indices[1] <= textLength);
 	const tags = allTags.filter((t: any) => t.indices[1] <= textLength);
-	const urls = linkEntities(shown, textLength);
+	const urls = linkEntities(shown, textLength, p.localLinks);
 	const media = (p.media ?? []).map((m, i) => mediaEntity(m, p.id, p.author.screen_name, i, textLength));
 	const quoteLink = p.quoted && permalink(p.quoted);
 	return {
@@ -466,7 +474,7 @@ function plainTweet(p: PostRow, withTypename: boolean): Record<string, unknown> 
 		...(long ? { note_tweet: { is_expandable: true, note_tweet_results: { result: {
 			id: globalId("NoteTweet", p.id),
 			text: p.text,
-			entity_set: { hashtags: allTags, user_mentions: allMentions, urls: linkEntities(p.text), symbols: [] },
+			entity_set: { hashtags: allTags, user_mentions: allMentions, urls: linkEntities(p.text, undefined, p.localLinks), symbols: [] },
 		} } } } : {}),
 		cashtag_attachments: [],
 		core: { user_results: { result: userResult(p.author) } },
@@ -496,7 +504,7 @@ function plainTweet(p: PostRow, withTypename: boolean): Record<string, unknown> 
 			full_text: shown,
 			possibly_sensitive: !!p.sensitive,
 			...(placeById(p.place_id) ? { place: placeById(p.place_id) } : {}),
-			source: (p.source ?? webSource()).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!),
+			source: shownSource(p.source, p.author.instance).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!),
 			id_str: p.id,
 			...(p.reply_to_id
 				? {
@@ -504,7 +512,7 @@ function plainTweet(p: PostRow, withTypename: boolean): Record<string, unknown> 
 						...(p.reply_user_id ? { in_reply_to_screen_name: p.reply_screen_name, in_reply_to_user_id_str: p.reply_user_id } : {}),
 					}
 				: {}),
-			is_quote_status: !!p.quote_id,
+			is_quote_status: !!p.quote_id || !!p.quoted,
 			...(p.quoted && quoteLink
 				? {
 						quoted_status_id_str: p.quoted.id,

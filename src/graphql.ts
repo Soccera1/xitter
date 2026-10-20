@@ -1,3 +1,4 @@
+import { RateLimitError, limitedResponse } from "./ratelimit";
 // GraphQL operations, routed by name. The client sends a query id that changes
 // with every build; the name after it is stable.
 
@@ -55,9 +56,11 @@ import {
 	setPinnedReply,
 	pinnedReplyOf,
 	unrepost,
+	seenBy,
 } from "./posts";
+import { lookupRemoteUser } from "./federation-sync";
 import { TopicError, setTopicState, suggestedTopics, topicById, topicContext, topicFeedbackActions, topicFeedbackKeys, topicResult, topicsForPosts } from "./topics";
-import { affiliatesOf, followList, suggestedUsers, userById, userByName, usersByIds } from "./users";
+import { affiliatesOf, followList, localName, suggestedUsers, userById, userByName, usersByIds } from "./users";
 
 type Vars = Record<string, any>;
 type Handler = (viewer: Viewer, vars: Vars) => Promise<unknown> | unknown;
@@ -430,6 +433,9 @@ const wholeList = (entries: unknown[], base: bigint) => [
 const reactors = (kind: "reposts" | "likes", key: string): Handler => async (viewer, vars) => {
 	const empty = { data: { [key]: { timeline: { instructions: [{ type: "TimelineAddEntries", entries: [] }] } } } };
 	if (!isId(vars.tweetId) || vars.cursor) return empty;
+	const [post] = await sql`select 1 from posts p join users u on u.id = p.user_id where p.id = ${sql.cast(vars.tweetId, "bigint")} and ${seenBy(viewer.id)}
+		and u.id not in (select blocker_id from blocks where blocked_id = ${sql.cast(viewer.id, "bigint")})`;
+	if (!post) return empty;
 	const rows =
 		kind === "reposts"
 			? await sql`select ${sql.cast(sql`r.user_id`, "text")} as id from reposts r where r.post_id = ${sql.cast(vars.tweetId, "bigint")} and r.user_id not in ${blockedFor(viewer.id)} and r.user_id not in ${protectedFor(viewer.id)} and r.user_id not in ${outOfView(viewer.id)} order by r.created_at desc limit 100`
@@ -652,7 +658,8 @@ const handlers: Record<string, Handler> = {
 	},
 
 	UserByScreenName: async (v, vars) => {
-		const user = typeof vars.screen_name === "string" ? await userByName(v.id, vars.screen_name) : undefined;
+		const name = typeof vars.screen_name === "string" ? localName(vars.screen_name.replace(/^@/, "")) : "";
+		const user = name ? ((await userByName(v.id, name)) ?? (name.includes("@") && (await lookupRemoteUser(name).catch(() => undefined)) ? await userByName(v.id, name) : undefined)) : undefined;
 		// an empty answer makes the client show "this account doesn't exist"
 		if (!user) return { data: {} };
 		// staff too: they look a suspended account up in the admin panel
@@ -667,7 +674,7 @@ const handlers: Record<string, Handler> = {
 		if (!user || user.status === "suspended")
 			return { data: { user_result_by_screen_name: { result: { __typename: "UserUnavailable", unavailable_reason: user ? "Suspended" : "NotFound" } } } };
 		const [extra] = await sql`select u.verified_at, u.country, u.based_in_override, u.signup_country, ${sql.jsonGet(sql`u.preferences`, sql`'inferred_location_resolution_preference'`, true)} as location_pref,
-			-- accounts from before sign-ups were recorded: the app of their first post
+
 			coalesce(u.signup_source, (select p.source from posts p where p.user_id = u.id order by p.id limit 1)) as source,
 			(select ${sql.cast(sql`count(*)`, "int")} from username_changes c where c.user_id = u.id) as changes,
 			(select max(c.changed_at) from username_changes c where c.user_id = u.id) as last_change
@@ -1094,6 +1101,7 @@ export async function runOperation(name: string, viewer: Viewer, vars: Vars): Pr
 	try {
 		return Response.json(await handlers[name](viewer, vars));
 	} catch (e) {
+		if (e instanceof RateLimitError) return limitedResponse(e.hit);
 		// the chat app reads these as they are
 		if (e instanceof ChatError) return Response.json({ errors: [{ message: e.message, code: e.code }], data: {} });
 		// the main client takes the code from extensions and shows the message

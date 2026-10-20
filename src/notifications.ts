@@ -4,7 +4,7 @@
 // for, and replies, quotes and mentions (shown as the posts themselves). Entries sort by time in milliseconds, which is also what
 // the cursors and the read marker hold.
 
-import { hasMutedWord, suspendedFor } from "./blocks";
+import { blockedFor, federatedMutedFor, hasMutedWord, mutedFor, suspendedFor } from "./blocks";
 import type { User } from "./auth";
 import { PUBLIC_ORIGIN } from "./config";
 import { sql } from "./db";
@@ -32,11 +32,10 @@ async function items(viewerId: string, opts: { before?: number; after?: number; 
 	const lo = opts.after !== undefined ? new Date(opts.after + 1) : new Date(0);
 	const hi = opts.before ? new Date(opts.before) : new Date(8.64e15);
 	const out: Item[] = [];
-	// nothing from blocked or muted accounts, nor posts holding a muted word
-	const hidden = sql`(select blocked_id as id from blocks where blocker_id = ${sql.cast(viewerId, "bigint")}
-		union all select blocker_id from blocks where blocked_id = ${sql.cast(viewerId, "bigint")}
-		union all select muted_id from mutes where muter_id = ${sql.cast(viewerId, "bigint")}
-		union all select id from users where id in ${suspendedFor(viewerId)})`;
+	// nothing from blocked or muted accounts, nor posts holding a muted word;
+	// nor from hidden instances, for someone who muted those too
+	const hidden = sql`(select x.id from ${blockedFor(viewerId)} as x union all select x.id from ${mutedFor(viewerId)} as x
+		union all select x.id from ${suspendedFor(viewerId)} as x union all select x.id from ${federatedMutedFor(viewerId)} as x)`;
 
 	if (!opts.mentionsOnly) {
 		for (const kind of ["like", "repost"] as const) {
@@ -92,15 +91,15 @@ async function items(viewerId: string, opts: { before?: number; after?: number; 
 
 	const posts = await sql`
 		select x.id, x.created_at as at, x.reason from (
-			select p.id, p.created_at, 'reply' as reason from posts p join posts parent on parent.id = p.reply_to_id
+			select p.id, ${sql.greatest(sql`p.created_at`, sql.least(sql`p.received_at`, sql`p . created_at + ${sql.duration(1, "day")}`))} as created_at, 'reply' as reason from posts p join posts parent on parent.id = p.reply_to_id
 				where p.reply_to_user_id = ${sql.cast(viewerId, "bigint")} and parent.user_id = ${sql.cast(viewerId, "bigint")} and p.user_id <> ${sql.cast(viewerId, "bigint")} and p.user_id not in ${hidden} and not ${hasMutedWord(viewerId, "notifications", sql`p.id`)}
 			union all
-			select p.id, p.created_at, 'mention' from posts p join post_mentions m on m.post_id = p.id
+			select p.id, ${sql.greatest(sql`p.created_at`, sql.least(sql`p.received_at`, sql`p . created_at + ${sql.duration(1, "day")}`))} as created_at, 'mention' from posts p join post_mentions m on m.post_id = p.id
 				where m.user_id = ${sql.cast(viewerId, "bigint")} and p.user_id <> ${sql.cast(viewerId, "bigint")} and p.user_id not in ${hidden} and not ${hasMutedWord(viewerId, "notifications", sql`p.id`)}
 			${opts.mentionsOnly
 					? sql``
 					: sql`union all
-			select p.id, p.created_at, 'quote' from posts p join posts quoted on quoted.id = p.quote_id
+			select p.id, ${sql.greatest(sql`p.created_at`, sql.least(sql`p.received_at`, sql`p . created_at + ${sql.duration(1, "day")}`))} as created_at, 'quote' from posts p join posts quoted on quoted.id = p.quote_id
 				where quoted.user_id = ${sql.cast(viewerId, "bigint")} and p.user_id <> ${sql.cast(viewerId, "bigint")} and p.user_id not in ${hidden} and not ${hasMutedWord(viewerId, "notifications", sql`p.id`)}`}
 		) x where x.created_at >= ${lo} and x.created_at < ${hi}
 		order by x.created_at desc limit ${opts.limit * 2}`;
@@ -291,7 +290,8 @@ export async function pushItems(viewerId: string, sinceMs: number): Promise<Push
 	const list = await items(viewerId, { after: sinceMs, limit: 20, mentionsOnly: false });
 	const userIds = [...new Set(list.flatMap((i) => (i.kind === "post" || i.kind === "staff" ? [] : i.users)))];
 	const postIds = [...new Set(list.flatMap((i) => (i.kind === "staff" || !i.postId ? [] : [i.postId])))];
-	const [users, posts] = await Promise.all([usersByIds(viewerId, userIds), postsByIds(viewerId, postIds)]);
+	// a push isn't the post being seen: no view is counted
+	const [users, posts] = await Promise.all([usersByIds(viewerId, userIds), postsByIds(viewerId, postIds, true, { views: false })]);
 	const name = (u?: User) => (u ? u.name || u.screen_name : "Someone");
 	const snippet = (p?: PostRow) => (p ? `: ${clip(p.text)}` : "");
 	const out: PushItem[] = [];

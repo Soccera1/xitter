@@ -7,6 +7,7 @@ import { existsSync, realpathSync, unlinkSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { type Action, AdminError, audit, guard, idOf } from "./admin";
 import { loadBuild } from "./build";
+import { INSTANCE_ID, isPeer } from "./federation";
 import { sql, databaseBackend, databaseBytes } from "./db";
 import { newId } from "./ids";
 import { MEDIA_DIR, sniffImage } from "./media";
@@ -17,6 +18,7 @@ import { escalate, shutOut } from "./moderation";
 import { blockedNameIn, blockedWordIn, suspendForName } from "./names";
 import { setSetting, settings } from "./settings";
 import { clientIp, ipAllowed, parseRange } from "./staff-access";
+import { allows } from "./staff-permissions";
 import { BACKUP_DIR, createBackup, deleteBackup, listBackups } from "./backups";
 import { clientStatus, latestSha, rollbackClient, updateClient } from "./client-update";
 
@@ -117,12 +119,27 @@ export const toolActions: Record<string, Action> = {
 			return {};
 		},
 	},
+	// takes off everything an account wears from Steam (decor.ts): theme,
+	// background, frame; what it wore goes in the audit log
+	resetDecor: {
+		role: "moderator",
+		run: async (a, b) => {
+			const id = idOf(b.id);
+			await guard(a, id, true);
+			const [u] = await sql`select decor from users where id = ${sql.cast(id, "bigint")}`;
+			if (!u?.decor) return {};
+			await sql`update users set decor = null where id = ${sql.cast(id, "bigint")}`;
+			const d = u.decor;
+			await audit(a, "reset_decor", id, { theme: d.theme ?? null, background: d.background?.name ?? null, frame: d.frame?.name ?? null, profile: d.profile?.name ?? null });
+			return {};
+		},
+	},
 	// an account's profile label: X's Parody, Commentary or Fan, a staff-made one, or None
 	setProfileLabel: {
 		role: "admin",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			await guard(a, id);
+			await guard(a, id, true);
 			const pick = typeof b.label === "string" ? b.label : "None";
 			if (["None", "Parody", "Commentary", "Fan"].includes(pick)) {
 				await sql`update users set parody_label = ${pick}, label_id = null where id = ${sql.cast(id, "bigint")}`;
@@ -140,7 +157,7 @@ export const toolActions: Record<string, Action> = {
 		role: "admin",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			await guard(a, id);
+			await guard(a, id, true);
 			if (!Array.isArray(b.badgeIds) || b.badgeIds.length > 10) throw new AdminError("Choose up to 10 badges.");
 			const badges = [...new Set(b.badgeIds.map((x: unknown) => idOf(x, "badge")))] as string[];
 			for (const badge of badges) await badgeExists(badge);
@@ -158,11 +175,11 @@ export const toolActions: Record<string, Action> = {
 		role: "admin",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			await guard(a, id);
+			await guard(a, id, true);
 			const badge = b.badgeId ? idOf(b.badgeId) : null;
 			await badgeExists(badge);
-			const rows = await sql`update users set org_badge_id = ${sql.cast(badge, "bigint")} where id = ${sql.cast(id, "bigint")} and verified_type in ('business', 'government') returning id`;
-			if (!rows.length) throw new AdminError("Only organisations have an organisation badge.");
+			const rows = await sql`update users set org_badge_id = ${sql.cast(badge, "bigint")} where id = ${sql.cast(id, "bigint")} returning id`;
+			if (!rows.length) throw new AdminError("No such account.", 404);
 			await audit(a, "org_badge", id, { badge });
 			return {};
 		},
@@ -189,7 +206,7 @@ export const toolActions: Record<string, Action> = {
 		role: "moderator",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			await guard(a, id);
+			await guard(a, id, true);
 			const kind = b.kind ?? "message";
 			if (!["message", "warning", "strike"].includes(kind)) throw new AdminError("Unknown message type.");
 			const message = newId();
@@ -289,7 +306,7 @@ export const toolActions: Record<string, Action> = {
 		run: async (a, b) => {
 			const id = idOf(b.id);
 			await guard(a, id);
-			return { sessions: await sql`select ${sql.cast(sql`id`, "text")} as id, created_at, last_seen_at, user_agent, ip, token = ${a.token} as current from sessions where user_id = ${sql.cast(id, "bigint")} order by last_seen_at desc` };
+			return { sessions: await sql`select ${sql.cast(sql`id`, "text")} as id, created_at, last_seen_at, user_agent, ${allows(a.role, "ip_addresses") ? sql`ip` : sql`null as ip`}, token = ${a.token} as current from sessions where user_id = ${sql.cast(id, "bigint")} order by last_seen_at desc` };
 		},
 	},
 	revokeSession: {
@@ -367,7 +384,7 @@ export const toolActions: Record<string, Action> = {
 		role: "admin",
 		run: async (a, b) => {
 			const id = idOf(b.id);
-			await guard(a, id);
+			await guard(a, id, true);
 			const counts = countsOf(b.counts, ["followers", "following"]);
 			await sql`update users set count_overrides = ${counts ? sql.cast(JSON.stringify(counts), "jsonb") : null} where id = ${sql.cast(id, "bigint")}`;
 			await audit(a, "set_user_counts", id, { counts });
@@ -482,7 +499,18 @@ export const toolActions: Record<string, Action> = {
 		role: "admin",
 		run: async (a, b) => {
 			if (typeof b.maintenance !== "boolean" || typeof b.message !== "string" || b.message.length > 500) throw new AdminError("Invalid maintenance settings.");
-			const pin = b.global_pin ? idOf(String(b.global_pin).trim(), "post id") : null;
+			const pin = await (async () => {
+				const raw = typeof b.global_pin === "string" || typeof b.global_pin === "number" ? String(b.global_pin).trim() : "";
+				if (!raw) return null;
+				const url = /^https?:\/\/([^/?#\s]{1,260})\/[^?#\s]*\/status\/(\d{1,19})(?:[/?#]|$)/i.exec(raw);
+				if (!url) return idOf((/\/status\/(\d{1,19})/.exec(raw) ?? [])[1] ?? raw, "post id");
+				const host = url[1].toLowerCase();
+				const id = idOf(url[2], "post id");
+				if (host === INSTANCE_ID || !isPeer(host)) return id;
+				const [row] = await sql`select ${sql.cast(sql`local_id`, "text")} as local_id from federated_objects where instance = ${host} and kind = 'post' and remote_id = ${sql.cast(id, "bigint")}`;
+				if (!row) throw new AdminError("That post hasn't reached this instance yet.");
+				return row.local_id as string;
+			})();
 			if (pin && !(await sql`select 1 from posts where id = ${sql.cast(pin, "bigint")} and not hidden`).length) throw new AdminError("Pin an existing visible post.");
 			await setSetting("operations", {
 				maintenance: b.maintenance,
@@ -626,7 +654,7 @@ export const toolActions: Record<string, Action> = {
 
 	// errors.ts: distinct errors, the latest first
 	errors: {
-		role: "support",
+		role: "admin",
 		run: async (_a, b) => ({
 			errors: await sql`select e.fingerprint, e.source, e.message, e.stack, e.path, e.count, e.first_at, e.last_at, e.resolved, ${sql.cast(sql`e.user_id`, "text")} as user_id, u.screen_name
 				from error_log e left join users u on u.id = e.user_id

@@ -239,8 +239,14 @@ async function joinable(viewerId: string, conversationId: string): Promise<strin
 	}
 	const all = await members(conversationId);
 	if (!all.includes(viewerId)) throw new ChatError("Not a member of this conversation.");
-	await writable(viewerId, all);
+	await inGroup(viewerId, conversationId, all);
 	return all;
+}
+
+async function inGroup(viewerId: string, conversationId: string, all: string[]) {
+	if (directMembers(conversationId)) return writable(viewerId, all);
+	const [me] = await sql`select status from users where id = ${sql.cast(viewerId, "bigint")}`;
+	if (!me || me.status === "suspended") throw new ChatError("Account unavailable.");
 }
 
 async function writable(viewerId: string, all: string[]) {
@@ -251,10 +257,14 @@ async function writable(viewerId: string, all: string[]) {
 	if (blocked) throw new ChatError("Messaging is blocked.");
 }
 
+async function membership(viewerId: string, conversationId: string) {
+	if (!(await members(conversationId)).includes(viewerId)) throw new ChatError("Not a member of this conversation.");
+}
+
 async function authorized(viewerId: string, conversationId: string) {
 	const all = await members(conversationId);
 	if (!all.includes(viewerId)) throw new ChatError("Not a member of this conversation.");
-	await writable(viewerId, all);
+	await inGroup(viewerId, conversationId, all);
 	return all;
 }
 
@@ -354,7 +364,7 @@ export const chatSocket = {
 		if (!ev || !conversationId || kindOf(ev) !== KIND.typing) return;
 		const all = await members(conversationId);
 		if (!all.includes(ws.data.userId)) return;
-		try { await writable(ws.data.userId, all); } catch { return; }
+		try { await inGroup(ws.data.userId, conversationId, all); } catch { return; }
 		ev[3] = str(ws.data.userId);
 		ev[6] = str(String(Date.now()));
 		deliver(all, [thrift.encode(ev)], ws);
@@ -386,7 +396,7 @@ async function conversationData(viewerId: string, conversationId: string) {
 			where latest.conversation_id = m.conversation_id and latest.kind = ${KIND.read} and latest.sender_id = m.user_id
 			order by latest.seq desc limit 1)
 		where m.conversation_id = ${conversationId} order by m.user_id`;
-	const [last] = await sql`select ${sql.cast(sql`seq`, "text")} as seq from chat_events where conversation_id = ${conversationId} order by seq desc limit 1`;
+	const [last] = await sql`select ${sql.cast(sql`seq`, "text")} as seq from chat_events where conversation_id = ${conversationId} order by chat_events.seq desc limit 1`;
 	const b64 = (r: { event: Buffer }) => Buffer.from(r.event).toString("base64");
 	const direct = !!directMembers(conversationId);
 	const [state] = await sql`select muted, archived from chat_members where conversation_id = ${conversationId} and user_id = ${sql.cast(viewerId, "bigint")}`;
@@ -505,7 +515,7 @@ async function groupAdmin(v: Viewer, conversationId: string) {
 
 async function deleteMessages(v: Viewer, vars: Vars) {
 	const id = String(vars.conversation_id ?? "");
-	await authorized(v.id, id);
+	await membership(v.id, id);
 	const seqs = ids(vars.sequence_ids);
 	if (!seqs.length) throw new ChatError("Choose a message.");
 	const rows = await sql`select ${sql.cast(sql`seq`, "text")} as seq, ${sql.cast(sql`sender_id`, "text")} as sender_id from chat_events where conversation_id = ${id} and ${sql.contains(sql.array(seqs, "INT8"), sql`seq`)} and kind = 1`;
@@ -535,7 +545,7 @@ async function deleteMessages(v: Viewer, vars: Vars) {
 export const chatHandlers: Record<string, (viewer: Viewer, vars: Vars) => Promise<unknown> | unknown> = {
 	...media.handlers,
 	GetConversationEntryDetailsQuery: async (v, vars) => {
-		await authorized(v.id, String(vars.conversation_id));
+		await membership(v.id, String(vars.conversation_id));
 		return { data: { get_conversation_entry_details: { __typename: "XChatGetConversationEntryDetailsResponse", group_type: "Normal", read_only_reason: null } } };
 	},
 	InitializeGroupConversationMutation: async (v) => {
@@ -586,26 +596,26 @@ export const chatHandlers: Record<string, (viewer: Viewer, vars: Vars) => Promis
 	DeleteMessageMutation: deleteMessages,
 	ConversationDeleteMutation: async (v, vars) => {
 		const id = String(vars.conversation_id ?? "");
-		await authorized(v.id, id);
+		await membership(v.id, id);
 		const [latest] = await sql`select ${sql.cast(sql`max(seq)`, "text")} as seq from chat_events where conversation_id = ${id}`;
 		await sql`update chat_members set deleted_before = ${sql.cast(latest.seq ?? "0", "bigint")} where conversation_id = ${id} and user_id = ${sql.cast(v.id, "bigint")}`;
 		return { data: { xchat_delete_conversation: { __typename: "DeleteConversationResponse", error_code: null } } };
 	},
 	MuteConversationMutation: async (v, vars) => {
-		for (const id of vars.conversationIds ?? []) { await authorized(v.id, String(id)); await sql`update chat_members set muted = true where conversation_id = ${String(id)} and user_id = ${sql.cast(v.id, "bigint")}`; }
+		for (const id of vars.conversationIds ?? []) { await membership(v.id, String(id)); await sql`update chat_members set muted = true where conversation_id = ${String(id)} and user_id = ${sql.cast(v.id, "bigint")}`; }
 		return { data: { xchat_mute_conversation: { __typename: "MuteXChatConversationResponse", error_code: null } } };
 	},
 	ArchiveConversationMutation: async (v, vars) => {
-		const id = String(vars.conversationId ?? ""); await authorized(v.id, id);
+		const id = String(vars.conversationId ?? ""); await membership(v.id, id);
 		await sql`update chat_members set archived = true where conversation_id = ${id} and user_id = ${sql.cast(v.id, "bigint")}`;
 		return { data: { xchat_archive_conversation: { __typename: "ArchiveXChatConversationResponse", error_code: null } } };
 	},
 	UnmuteConversationMutation: async (v, vars) => {
-		for (const id of vars.conversationIds ?? []) { await authorized(v.id, String(id)); await sql`update chat_members set muted = false where conversation_id = ${String(id)} and user_id = ${sql.cast(v.id, "bigint")}`; }
+		for (const id of vars.conversationIds ?? []) { await membership(v.id, String(id)); await sql`update chat_members set muted = false where conversation_id = ${String(id)} and user_id = ${sql.cast(v.id, "bigint")}`; }
 		return { data: { xchat_unmute_conversation: { __typename: "MuteXChatConversationResponse", error_code: null } } };
 	},
 	UnarchiveConversationMutation: async (v, vars) => {
-		const id = String(vars.conversationId ?? ""); await authorized(v.id, id);
+		const id = String(vars.conversationId ?? ""); await membership(v.id, id);
 		await sql`update chat_members set archived = false where conversation_id = ${id} and user_id = ${sql.cast(v.id, "bigint")}`;
 		return { data: { xchat_unarchive_conversation: { __typename: "ArchiveXChatConversationResponse", error_code: null } } };
 	},
@@ -616,7 +626,7 @@ export const chatHandlers: Record<string, (viewer: Viewer, vars: Vars) => Promis
 		const added = ids(vars.user_ids);
 		const all = [...new Set([...await members(id), ...added])];
 		if (all.length > 100) throw new ChatError("Group is full.");
-		await writable(v.id, all);
+		await writable(v.id, [...new Set([v.id, ...added])]);
 		for (const member of added) await sql`insert into chat_members (conversation_id, user_id) values (${id}, ${sql.cast(member, "bigint")}) on conflict do nothing`;
 		const seqs = await actionEvents(v, id, vars.action_signatures, [3, 4]);
 		return { data: { xchat_add_group_members: { __typename: "AddGroupMembersResponse", error_code: null,
@@ -702,7 +712,12 @@ export const chatHandlers: Record<string, (viewer: Viewer, vars: Vars) => Promis
 	GetUsersByScreenNameForXChat: async (v, vars) => {
 		const names: string[] = Array.isArray(vars.screen_names) ? vars.screen_names.filter((x: unknown) => typeof x === "string").slice(0, 50) : [];
 		const found = (await Promise.all(names.map((n) => userByName(v.id, n)))).filter((u): u is User => !!u);
-		const results = await userResults(v.id, found.map((u) => u.id), { keys: !!vars.include_user_public_keys, tokens: !!vars.include_juicebox_tokens });
+		const local = new Set(
+			found.length
+				? (await sql`select ${sql.cast(sql`id`, "text")} as id from users where ${sql.contains(sql.array(found.map((u) => u.id), "BIGINT"), sql`id`)} and instance is null and deactivated_at is null`).map((r: { id: string }) => r.id)
+				: [],
+		);
+		const results = await userResults(v.id, found.filter((u) => local.has(u.id)).map((u) => u.id), { keys: !!vars.include_user_public_keys, tokens: !!vars.include_juicebox_tokens });
 		return {
 			data: {
 				get_member_results_by_screen_name: {
@@ -716,8 +731,8 @@ export const chatHandlers: Record<string, (viewer: Viewer, vars: Vars) => Promis
 		const q = String(vars.query ?? "").trim().replace(/^@/, "");
 		// with nothing typed: the accounts the viewer follows
 		const rows = q
-			? await sql`select ${sql.cast(sql`id`, "text")} as id from users where status <> 'suspended' and (${sql.like(sql`screen_name`, `${q}%`, true)} or ${sql.like(sql`name`, `%${q}%`, true)}) order by (lower(screen_name) = lower(${q})) desc, screen_name limit 10`
-			: await sql`select ${sql.cast(sql`u.id`, "text")} as id from follows f join users u on u.id = f.followee_id where f.follower_id = ${sql.cast(v.id, "bigint")} and u.status <> 'suspended' order by f.created_at desc limit 10`;
+			? await sql`select ${sql.cast(sql`id`, "text")} as id from users where status <> 'suspended' and instance is null and deactivated_at is null and (${sql.like(sql`screen_name`, `${q}%`, true)} or ${sql.like(sql`name`, `%${q}%`, true)}) order by (lower(screen_name) = lower(${q})) desc, screen_name limit 10`
+			: await sql`select ${sql.cast(sql`u.id`, "text")} as id from follows f join users u on u.id = f.followee_id where f.follower_id = ${sql.cast(v.id, "bigint")} and u.status <> 'suspended' and u.instance is null and u.deactivated_at is null order by f.created_at desc limit 10`;
 		const results = await userResults(v.id, rows.map((r: { id: string }) => r.id), { keys: !!vars.include_user_public_keys, tokens: !!vars.include_juicebox_tokens });
 		return {
 			data: {

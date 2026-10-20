@@ -23,14 +23,15 @@ const user = async (id: string, name: string) =>
 test("SQLite selection, persistent schema, constraints, and complete table/column coverage", async () => {
 	expect(databaseBackend).toBe("sqlite");
 	const { schema } = await import("../src/schema");
-	const tables = await sql`select name from sqlite_master where type = 'table' and name <> '_xitter_schema_history'`;
+	const tables = await sql`select name from sqlite_master where type = 'table' and name <> '_xitter_schema_history' and name not like 'sqlite_%'`;
 	expect(tables.map((r: any) => r.name).sort()).toEqual(Object.keys(schema.tables).sort());
 	for (const [table, definition] of Object.entries(schema.tables)) {
 		const actual = await sql.unsafe(`pragma table_info("${table}")`);
 		expect(actual.map((r: any) => r.name).sort()).toEqual(Object.keys(definition.columns).sort());
 	}
 	const indexes = await sql`select name from sqlite_master where type = 'index'`;
-	for (const name of Object.keys(schema.indexes)) expect(indexes.some((r: any) => r.name === name)).toBe(true);
+	for (const [name, index] of Object.entries(schema.indexes))
+		if (!index.dialects || index.dialects.includes("sqlite")) expect(indexes.some((r: any) => r.name === name)).toBe(true);
 	await user("9007199254740993", "Первый");
 	await rejects(user("9007199254740994", "ПЕРВЫЙ"));
 	await rejects(Promise.resolve(sql`insert into follows(follower_id,followee_id) values(9007199254740993,999)`));

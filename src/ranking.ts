@@ -64,13 +64,13 @@ async function rank(viewerId: string, asOf: string): Promise<Ranked> {
 			select f.*, (select x.user_id from posts x where x.id = f.post_id) as original_author
 			from feed_items f
 			where not f.is_reply and f.item_id <= ${sql.cast(asOf, "bigint")} and ${homeHidden(viewerId)} and ${communityVisible(viewerId)}
-				-- "Visibility limited" (staff's Fosnr label): never recommended
+
 				and not ${sql.equal(sql` (select ${sql.jsonGet(sql`x.notice`, sql`'type'`, true)} from posts x where x.id = f.post_id)`, sql`'Fosnr'`)}
 				and not ${unwantedTopicMatch(viewerId, sql`f.post_id`, sql`(select x.user_id from posts x where x.id = f.post_id)`)}
 			order by f.item_id desc limit ${CANDIDATES * 3}
 		),
-		-- authors the viewer liked or replied to in the last month, once for all
-		-- candidates (inlined, the planner ran it again for each of them)
+
+
 		affinity as materialized (
 			select author, sum(n) as n from (
 				select lp.user_id as author, count(*) as n from likes l join posts lp on lp.id = l.post_id
@@ -80,34 +80,43 @@ async function rank(viewerId: string, asOf: string): Promise<Ranked> {
 					where rp.user_id = ${sql.cast(viewerId, "bigint")} and rp.created_at > ${sql.cast(at, "timestamptz")} - ${sql.duration(30, "day")} group by 1
 			) x group by author
 		),
+
+
+		per_post as materialized (
+			select d.post_id,
+
+				ln(2
+				 + (select count(*) from likes l where l.post_id = d.post_id)
+				 + 2 * (select count(*) from reposts r where r.post_id = d.post_id)
+				 + 27 * (select count(*) from posts rp where rp.reply_to_id = d.post_id)
+				 + 150 * (select count(*) from posts rp where rp.reply_to_id = d.post_id
+					and exists (select 1 from posts ar where ar.reply_to_id = rp.id and ar.user_id = d.original_author))
+				) as engagement,
+
+				(case when exists (select 1 from likes l join follows fw on fw.followee_id = l.user_id
+						where l.post_id = d.post_id and fw.follower_id = ${sql.cast(viewerId, "bigint")})
+					or exists (select 1 from reposts r join follows fw on fw.followee_id = r.user_id
+						where r.post_id = d.post_id and fw.follower_id = ${sql.cast(viewerId, "bigint")}) then 1.5 else 1.0 end) as social,
+				(case when ${followedTopicMatch(viewerId, sql`d.post_id`)} then 1.5 else 1.0 end) as topic,
+
+				(1 + ${sql.least(sql`1.0`, sql`0.1 * coalesce((select af.n from affinity af where af.author = d.original_author), 0)`)}) as affinity,
+
+				(case when d.original_author = ${sql.cast(viewerId, "bigint")} then 0.5 else 1.0 end) as own
+			from (select distinct post_id, original_author from candidates) d
+		),
 		scored as (
 			select c.*,
-				-- on a log scale: raw counts let one answered reply outweigh days of age
-				ln(2
-				 + (select count(*) from likes l where l.post_id = c.post_id)
-				 + 2 * (select count(*) from reposts r where r.post_id = c.post_id)
-				 + 27 * (select count(*) from posts rp where rp.reply_to_id = c.post_id)
-				 + 150 * (select count(*) from posts rp where rp.reply_to_id = c.post_id
-					and exists (select 1 from posts ar where ar.reply_to_id = rp.id and ar.user_id = c.original_author))
-				)
-				-- people the viewer follows: their posts and reposts, and what they liked or reposted
+				p.engagement
+
 				* (case when c.author_id in (select followee_id from follows where follower_id = ${sql.cast(viewerId, "bigint")}) then 2.0 else 1.0 end)
-				* (case when exists (select 1 from likes l join follows fw on fw.followee_id = l.user_id
-						where l.post_id = c.post_id and fw.follower_id = ${sql.cast(viewerId, "bigint")})
-					or exists (select 1 from reposts r join follows fw on fw.followee_id = r.user_id
-						where r.post_id = c.post_id and fw.follower_id = ${sql.cast(viewerId, "bigint")}) then 1.5 else 1.0 end)
-				* (case when ${followedTopicMatch(viewerId, sql`c.post_id`)} then 1.5 else 1.0 end)
-				-- authors the viewer engaged with in the last month, up to double
-				* (1 + ${sql.least(sql`1.0`, sql`0.1 * coalesce((select af.n from affinity af where af.author = c.original_author), 0)`)})
-				-- the viewer's own posts are known to them already
-				* (case when c.original_author = ${sql.cast(viewerId, "bigint")} then 0.5 else 1.0 end)
-				-- halves every HALF_LIFE hours: a day-old post needs about 50 times the
-				-- engagement of a new one, so a quiet instance's feed still moves
+				* p.social * p.topic * p.affinity * p.own
+
+
 				* power(0.5, ${sql.greatest(sql`${sql.epoch(sql`( ${sql.cast(at, "timestamptz")} - c . created_at )`)} / 3600`, sql`0`)} / ${HALF_LIFE})
 				as score
-			from candidates c
+			from candidates c join per_post p on p.post_id = c.post_id
 		),
-		-- one entry per post: the best of the post itself and its reposts
+
 		best as (
 			select * from (select scored.*, row_number() over (partition by post_id order by score desc, item_id desc) as choice from scored) ranked where choice = 1
 		)

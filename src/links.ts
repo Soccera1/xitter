@@ -1,5 +1,6 @@
 import { PUBLIC_ORIGIN } from "./config";
 import { sql } from "./db";
+import { isPeer } from "./federation";
 
 const PROXY = (process.env.EMBED_PROXY ?? "https://cors.estrogen.delivery/").replace(/\/?$/, "/");
 export const proxied = (url: string) => `${PROXY}?url=${encodeURIComponent(url)}`;
@@ -32,10 +33,50 @@ const displayOf = (url: string) => {
 	return [...bare].length > 26 ? `${[...bare].slice(0, 25).join("")}…` : bare;
 };
 
-export const urlEntities = (text: string, upTo = Number.POSITIVE_INFINITY) =>
+export const PEER_STATUS = /^\/[^/]{1,320}\/status\/(\d{1,19})\/?$/;
+
+export function statusLinkOf(url: string): { host: string; id: string } | undefined {
+	try {
+		const u = new URL(url);
+		const id = PEER_STATUS.exec(u.pathname)?.[1];
+		const host = u.host.toLowerCase();
+		return id && /^https?:$/.test(u.protocol) && (host === OWN_HOST || isPeer(host)) ? { host, id } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function homeLink(url: string, local?: Map<string, string>): string {
+	const known = local?.get(url);
+	if (known) return known;
+	try {
+		const u = new URL(url);
+		const name = /^\/(\w{1,50})\/?$/.exec(u.pathname)?.[1];
+		return name && !u.search && isPeer(u.host.toLowerCase()) ? `${PUBLIC_ORIGIN}/${name}@${u.host.toLowerCase()}` : url;
+	} catch {
+		return url;
+	}
+}
+
+export const urlEntities = (text: string, upTo = Number.POSITIVE_INFINITY, local?: Map<string, string>) =>
 	linksIn(text)
 		.filter((l) => l.end <= upTo)
-		.map((l) => ({ display_url: displayOf(l.url), expanded_url: l.url, url: l.url, indices: [l.start, l.end] }));
+		.map((l) => ({ display_url: displayOf(l.url), expanded_url: homeLink(l.url, local), url: l.url, indices: [l.start, l.end] }));
+
+const BARE_DOMAIN = /(?<![\w@#/.:-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|dev|app|zip|lol|me|co|gg|xyz|tv|fm|ai|sh|so|to|cc|ly|is|it|de|fr|uk|eu|es|pt|br|nl|be|ch|at|pl|se|no|fi|dk|cz|ru|jp|kr|cn|in|au|ca|us|info|link|site|online|page|blog|art|moe|social|cafe|club|space|live|tech|codes|systems|computer|neocities|garden|gay|lgbt|wtf|fun|win|pw|nu|ee|lt|lv|ro|hu|gr|tr|il|nz|za|mx|ar|cl)(?:\/[^\s<>"]*)?(?![\w-])/gi;
+
+export function bioEntities(bio: string) {
+	const found = urlEntities(bio);
+	const taken = (start: number, end: number) => found.some((u) => start < u.indices[1] && end > u.indices[0]);
+	for (const m of bio.matchAll(BARE_DOMAIN)) {
+		const text = m[0].replace(TRAILING, "");
+		const start = [...bio.slice(0, m.index)].length;
+		const end = start + [...text].length;
+		if (taken(start, end)) continue;
+		found.push({ display_url: displayOf(text), expanded_url: `https://${text}`, url: `https://${text}`, indices: [start, end] });
+	}
+	return found.sort((a, b) => a.indices[0] - b.indices[0]);
+}
 
 const PRIVATE_HOST = /^(localhost|.*\.local|.*\.internal|.*\.localhost|0\.0\.0\.0|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|169\.254\.\d+\.\d+|\[.*\])$/i;
 
@@ -122,7 +163,8 @@ export async function fetchPreview(url: string): Promise<void> {
 	inFlight.add(url);
 	try {
 		const html = await fetchPage(url);
-		const p = html ? parsePreview(url, html) : undefined;
+		const shell = html && isPeer(new URL(url).host) && !/<meta\b[^>]*og:title/i.test(html.slice(0, 300_000));
+		const p = html && !shell ? parsePreview(url, html) : undefined;
 		await sql`insert into link_previews (url, ok, title, description, site, image, width, height, fetched_at)
 			values (${url}, ${!!p}, ${p?.title ?? ""}, ${p?.description ?? ""}, ${p?.site ?? ""}, ${p?.image ?? null}, ${p?.width ?? 0}, ${p?.height ?? 0}, now())
 			on conflict (url) do update set ok = excluded.ok, title = excluded.title, description = excluded.description, site = excluded.site,

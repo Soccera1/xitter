@@ -11,7 +11,7 @@ const keywords = new Set(
 	),
 );
 const functions = new Set(
-	"count sum min max avg coalesce nullif lower upper length char_length replace abs round floor ceil ceiling ln power row_number rank dense_rank lag lead now date_trunc to_char split_part regexp_replace array_to_string array_length".split(
+	"substr count sum min max avg coalesce nullif lower upper length char_length replace abs round floor ceil ceiling ln power row_number rank dense_rank lag lead now date_trunc to_char split_part regexp_replace array_to_string array_length".split(
 		" ",
 	),
 );
@@ -32,7 +32,7 @@ export function checkQueries(filename: string, source: string): string[] {
 	function visit(node: ts.Node) {
 		if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "unsafe")
 			report(node, "Native SQL belongs in src/db/, not application code");
-		if (ts.isTaggedTemplateExpression(node) && /^(sql|tx|nested)$/.test(node.tag.getText(ast))) {
+		if (ts.isTaggedTemplateExpression(node) && /^(sql|tx|nested|db|executor|publication)$/.test(node.tag.getText(ast))) {
 			const template = node.template;
 			const text = ts.isNoSubstitutionTemplateLiteral(template)
 				? template.text
@@ -41,10 +41,12 @@ export function checkQueries(filename: string, source: string): string[] {
 				.filter((token) => !token.startsWith("'") && !token.startsWith('"') && !token.startsWith("--") && !token.startsWith("/*"))
 				.map((token) => token.toLowerCase());
 			const ctes = new Set(tokens.filter((_, i) => tokens[i + 1] === "as" && tokens[i + 2] === "("));
+			const temporaryTables = new Set(tokens.filter((_, i) => tokens[i - 1] === "table" && tokens[i - 2] === "temporary"));
+			if (tokens[0] === "delete" && tokens.includes("using")) report(node, "Use a portable subquery instead of DELETE USING");
 			for (let i = 0; i < tokens.length; i++) {
 				const token = tokens[i];
 				if (
-					["::", "->", "->>", "~", "~*", "!~", "!~*", "ilike", "interval"].includes(token) ||
+					["?", "#", "::", "->", "->>", "~", "~*", "!~", "!~*", "ilike", "interval"].includes(token) ||
 					["lateral", "fetch"].includes(token) ||
 					(token === "distinct" && tokens[i + 1] === "on") ||
 					(token === "similar" && tokens[i + 1] === "to") ||
@@ -58,7 +60,7 @@ export function checkQueries(filename: string, source: string): string[] {
 					report(node, `Use a shared SQL helper for ${token}`);
 				if (tokens[i + 1] === "(" && /^[a-z_]\w*$/.test(token) && token !== "__binding__") {
 					if (backendFunctions.has(token)) report(node, `Use a shared SQL helper for ${token}()`);
-					else if (!keywords.has(token) && !functions.has(token) && !tables.has(token) && !ctes.has(token))
+					else if (!keywords.has(token) && !functions.has(token) && !tables.has(token) && !ctes.has(token) && !temporaryTables.has(token))
 						report(node, `Unregistered SQL function ${token}(); implement and test it in the database layer`);
 				}
 			}

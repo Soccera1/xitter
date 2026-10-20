@@ -41,7 +41,7 @@ export function createBackup() {
 			catch (e) { if (existsSync(partial)) unlinkSync(partial); throw e; }
 			return { name, bytes: statSync(path).size };
 		}
-		const dump = Bun.spawn([PG_DUMP, "--format=custom", "--no-owner", "--file", partial, databaseURL], { stderr: "pipe", stdout: "ignore" });
+		const dump = Bun.spawn([PG_DUMP, "--format=custom", "--no-owner", "--file", partial, process.env.BACKUP_DATABASE_URL ?? databaseURL], { stderr: "pipe", stdout: "ignore" });
 		const [code, err] = await Promise.all([dump.exited, new Response(dump.stderr).text()]);
 		if (code !== 0) {
 			if (existsSync(partial)) unlinkSync(partial);

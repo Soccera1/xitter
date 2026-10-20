@@ -28,22 +28,31 @@ import { badgeImage, expireSanctions } from "./moderation";
 import { appealRoute, noticesApi, noticesPage } from "./staff-notices";
 import { forgotRoute, resetRoute } from "./password-reset";
 import { twoFactorRoute } from "./two-factor";
-import { extraBadges } from "./badges";
+import { extraBadges, instanceCard } from "./badges";
+import { decorationFile, decorationsFor } from "./decorations";
+import { decorationRoute } from "./decoration-settings";
 import { startScheduler } from "./scheduled";
+import { federationRoute, startFederation } from "./federation-routes";
+import { acceptTicket, superadminHomeRoute } from "./superadmin";
 import { gifProxy } from "./gifs";
 import { cardImage } from "./explore-cards";
 import { rememberIp, requestIp } from "./login-history";
 import { bucketsFor, hit, isMutation, limitApi, limitedResponse } from "./ratelimit";
 import { actingViewer, delegateMay } from "./delegation";
 import { automationRoute } from "./automation";
+import { instancesRoute } from "./federation-settings";
 import { stickerImage, stickerPacks } from "./stickers";
 import { apiTokensRoute, publicApi } from "./public-api";
+import { connectedAppsRoute, developerAppsRoute, oauthAuthorize, oauthToken } from "./oauth";
 import { apiDocsPage } from "./api-docs";
 import { hashflagAsset } from "./hashflags";
 import { startMailDigests } from "./mail-digest";
 import { SERVICE_WORKER, startPush } from "./push";
+import { manifest } from "./pwa";
 import { emailRoute } from "./email-address";
 import { embedImage, linkPreview, oembed } from "./embeds";
+import { noteAppealsRoute } from "./note-appeals";
+import { decorCatalog, decorFor, decorRoute, decorShop, steamFile } from "./decor";
 
 const MIME: Record<string, string> = {
 	js: "text/javascript; charset=utf-8",
@@ -195,6 +204,11 @@ async function serveApi(req: Request, url: URL, viewer: Viewer | undefined): Pro
 	if (limited) return limited;
 	if (path === "/xitter/moderation") return noticesApi(req, viewer);
 	if (path === "/xitter/badges") return extraBadges(viewer.id, url);
+	if (path === "/xitter/decorations") return decorationsFor(url);
+	if (path === "/xitter/instance") return instanceCard(viewer.id, url);
+	if (path === "/xitter/decor") return decorFor(url);
+	if (path === "/xitter/decor/shop") return decorShop(url);
+	if (path === "/xitter/decor/catalog") return decorCatalog();
 	if (path === "/xitter/gif") return gifProxy(url);
 	if (path === "/xitter/stickers") return Response.json(await stickerPacks());
 	if (path === "/xitter/client_error" && req.method === "POST") return clientError(req, viewer);
@@ -268,6 +282,8 @@ async function route(req: Request): Promise<Response | undefined> {
 	rememberIp(req, server.requestIP(req)?.address);
 	const url = new URL(req.url);
 	const p = url.pathname;
+	if (p === "/federation/superadmin/accept") return acceptTicket(req, requestIp(req) ?? "unknown");
+	if (p.startsWith("/i/xitter/decoration/")) return (await decorationFile(url)) ?? new Response("not found", { status: 404 });
 	if (req.method !== "GET" && req.method !== "HEAD" && req.headers.has("cookie")) {
 		const site = req.headers.get("sec-fetch-site");
 		const origin = req.headers.get("origin");
@@ -275,6 +291,10 @@ async function route(req: Request): Promise<Response | undefined> {
 			return new Response("This request came from another site.", { status: 403 });
 	}
 	if (p.startsWith("/abs/")) return serveClient(req, p);
+	if (p === "/.well-known/xitter" || p.startsWith("/federation/v1/")) {
+		const answer = await federationRoute(req, url);
+		if (answer) return answer;
+	}
 	// chat: the live socket (its token from GenerateXChatTokenMutation) and
 	// the way to the key backup realm
 	if (p === "/xchat/ws") {
@@ -294,6 +314,7 @@ async function route(req: Request): Promise<Response | undefined> {
 	}
 	// the public API signs in with its own tokens, never cookies
 	if (p.startsWith("/api/v1/") || p === "/api/v1") return publicApi(req, url);
+	if (p === "/oauth/token") return oauthToken(req);
 	if (p === "/api" || p === "/api/") return apiDocsPage(req);
 	if (req.method === "OPTIONS") return new Response(null, { status: 204 });
 	if (p === "/login" && req.method === "POST") {
@@ -331,12 +352,14 @@ async function route(req: Request): Promise<Response | undefined> {
 		if (code) headers.append("set-cookie", `xitter_invite=${encodeURIComponent(code)}; Path=/; Max-Age=86400; SameSite=Lax; HttpOnly`);
 		return new Response(null, { status: 302, headers });
 	}
-	if (p.startsWith("/public/")) return servePublic(p);
+	if (p.startsWith("/public/") && !p.startsWith("/public/steam/")) return servePublic(p);
 	if (p === "/favicon.ico") return servePublic("/public/favicon.png");
 	if (p === "/sw.js") return new Response(SERVICE_WORKER, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" } });
-	if (p === "/manifest.json") return new Response(null, { status: 404 });
+	if (p === "/manifest.json") return manifest();
 
 	const viewer = await getViewer(req);
+	const steam = /^\/public\/steam\/(\d+)\/([^/]+)$/.exec(p);
+	if (steam) return steamFile(req, steam[1]!, steam[2]!, url.searchParams.has("thumb"), !!viewer);
 	if (viewer?.role && !(await staffGate(req, viewer))) markStaff();
 	// a suspended account can't sign in, so it appeals here with its password
 	if (p === "/appeal") return appealRoute(req, server.requestIP(req)?.address ?? "");
@@ -345,6 +368,10 @@ async function route(req: Request): Promise<Response | undefined> {
 		if (API_PREFIX.test(p) || req.method !== "GET") return apiError(503, 130, settings().operations.message);
 		return maintenancePage();
 	}
+	if (p === "/oauth/authorize") return oauthAuthorize(req, url, viewer);
+	if (p === "/account/apps" && viewer) return connectedAppsRoute(req, viewer);
+	if (p === "/account/apps/developer" && viewer) return developerAppsRoute(req, viewer);
+	if (p === "/federation/superadmin" || p.startsWith("/federation/superadmin/")) return superadminHomeRoute(req, url, viewer);
 	if (p === "/account/reset") return resetRoute(req, url);
 	if (p === "/account/forgot") {
 		if (req.method === "POST") {
@@ -358,8 +385,12 @@ async function route(req: Request): Promise<Response | undefined> {
 	if (p === "/account/notices" && viewer) return noticesPage(req, viewer);
 	if (p === "/account/invites" && viewer) return memberInvitesRoute(req, viewer);
 	if (p === "/account/api" && viewer) return apiTokensRoute(req, viewer);
+	if (p === "/account/notes/appeals" && viewer) return noteAppealsRoute(req, viewer);
 	if (p === "/account/automation" && viewer) return automationRoute(req, viewer);
+	if (p === "/account/instances" && viewer) return instancesRoute(req, viewer);
+	if (p === "/account/decoration" && viewer) return decorationRoute(req, viewer);
 	if (p === "/account/organisation" && viewer) return orgRoute(req, viewer);
+	if (p === "/account/decor" && viewer) return decorRoute(req, viewer);
 	if (p.startsWith("/i/ton/data/xchat_media/")) return chatMediaRoute(req, viewer, url);
 	// pictures and oEmbed for previews of public posts in other apps (embeds.ts)
 	if (p.startsWith("/embed/")) return embedImage(p);
@@ -396,9 +427,14 @@ async function route(req: Request): Promise<Response | undefined> {
 	}
 	// signed out: X's own home page with its sign-in form, and the dialog
 	if (!viewer && p !== "/" && !p.startsWith("/i/jf/onboarding")) return Response.redirect("/", 302);
-	const inCommunity = viewer ? (await sql`select 1 from community_members where user_id = ${sql.cast(viewer.id, "bigint")} limit 1`).length > 0 : false;
-	const [flagRow] = viewer ? await sql`select education_flags from users where id = ${sql.cast(viewer.id, "bigint")}` : [];
-	const page = shell(viewer ?? null, !!parseCookies(req).auth_multi, inCommunity, flagRow?.education_flags ?? {}, viewer ? await menuLinks(viewer.id) : []);
+	const [communityRows, flagRows, links] = viewer
+		? await Promise.all([
+			sql`select 1 from community_members where user_id = ${sql.cast(viewer.id, "bigint")} limit 1`,
+			sql`select education_flags from users where id = ${sql.cast(viewer.id, "bigint")}`,
+			menuLinks(viewer.id),
+		])
+		: [[], [], []];
+	const page = shell(viewer ?? null, !!parseCookies(req).auth_multi, communityRows.length > 0, flagRows[0]?.education_flags ?? {}, links);
 	if (!page) return new Response("no pinned client build: run scripts/fetch-client.ts --token or --har", { status: 500 });
 	const headers = new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": PAGE_CSP });
 	// a guest token left from the signed-out page makes the signed-in client act
@@ -419,6 +455,7 @@ const server = Bun.serve({
 });
 
 startScheduler();
+await startFederation();
 startMailDigests();
 startBackups();
 startPush();

@@ -145,7 +145,8 @@ export async function synchronizeSQLite(sqlite: ReturnType<typeof openSQLite>, d
 	const reference = openSQLite(":memory:");
 	try {
 		for (const [name, table] of Object.entries(desired.tables)) reference.db.exec(tableSQL(name, table, "sqlite"));
-		for (const [name, index] of Object.entries(desired.indexes)) reference.db.exec(indexSQL(name, index));
+		for (const [name, index] of Object.entries(desired.indexes))
+			if (!index.dialects || index.dialects.includes("sqlite")) reference.db.exec(indexSQL(name, index));
 		db.exec("pragma foreign_keys = off; pragma legacy_alter_table = on; begin immediate");
 		try {
 			db.exec(historyDDL);
@@ -244,6 +245,7 @@ export async function synchronizeSQLite(sqlite: ReturnType<typeof openSQLite>, d
 			}
 			for (const name of Object.keys(previous.indexes)) if (!desired.indexes[name]) run(`drop index if exists ${q(name)}`);
 			for (const [name, index] of Object.entries(desired.indexes)) {
+				if (index.dialects && !index.dialects.includes("sqlite")) continue;
 				const actual = (db.query("select sql from sqlite_master where type = 'index' and name = ?").get(name) as any)?.sql;
 				const target = indexSQL(name, index);
 				if (!actual || normal(actual.replace(/if not exists/gi, "")) !== normal(target)) {
@@ -321,7 +323,9 @@ export async function synchronizePostgres(sql: any, desired: Schema, upgrades: M
 			});
 		};
 		if (!rows.length) {
-			await tx.unsafe(bootstrap("postgres"));
+			// Adopt upstream installations without replaying obsolete constraints.
+			const [existing] = await tx`select to_regclass('users') as users`;
+			if (!existing.users) await tx.unsafe(bootstrap("postgres"));
 			await record(initial, ["001-initial.sql"]);
 		}
 		const hash = fingerprint(desired);
@@ -341,7 +345,7 @@ export async function synchronizePostgres(sql: any, desired: Schema, upgrades: M
 			}
 		const columns = async (name: string) =>
 			await tx.unsafe(
-				`select a.attname as name,format_type(a.atttypid,a.atttypmod) as type,a.attnotnull as not_null,pg_get_expr(d.adbin,d.adrelid) as default from pg_attribute a left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum where a.attrelid=to_regclass($1) and a.attnum>0 and not a.attisdropped order by a.attnum`,
+				`select a.attname as name,format_type(a.atttypid,a.atttypmod) as type,a.attnotnull as not_null,a.attidentity as identity,pg_get_expr(d.adbin,d.adrelid) as default from pg_attribute a left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum where a.attrelid=to_regclass($1) and a.attnum>0 and not a.attisdropped order by a.attnum`,
 				[name],
 			);
 		const constraints = async (name: string) =>
@@ -373,7 +377,12 @@ export async function synchronizePostgres(sql: any, desired: Schema, upgrades: M
 				}
 				safeType(old.type, wanted.type, `${name}.${wanted.name}`);
 				if (old.type !== wanted.type) await run(`alter table ${q(name)} alter column ${q(wanted.name)} type ${columnType(column, "postgres")}`);
-				if (old.default !== wanted.default)
+				// Existing upstream bigserial columns already own a live sequence.
+				// Preserve its default and current value when adopting the identity model.
+				if (column.identity && !old.identity && !/^nextval\(/.test(old.default ?? ""))
+					throw new Error(`Adding identity generation to ${name}.${wanted.name} requires an explicit migration`);
+				if (!column.identity && old.identity) throw new Error(`Removing identity generation from ${name}.${wanted.name} requires an explicit migration`);
+				if (!column.identity && old.default !== wanted.default)
 					await run(
 						`alter table ${q(name)} alter column ${q(wanted.name)} ${column.default === undefined ? "drop default" : `set default ${defaultSQL(column, "postgres")}`}`,
 					);
@@ -411,6 +420,8 @@ export async function synchronizePostgres(sql: any, desired: Schema, upgrades: M
 				)
 			)[0];
 		for (const [name, index] of Object.entries(desired.indexes)) {
+			if (index.dialects && !index.dialects.includes("postgres")) continue;
+			if (index.using === "gin") await tx.unsafe("create extension if not exists pg_trgm");
 			const shape = `_xitter_index_${name}`;
 			await tx.unsafe(indexSQL(shape, index));
 			const expected = await pgIndex(shape),

@@ -8,10 +8,11 @@ import type { Fragment } from "./db/query";
 // post marked sensitive. Admin > Settings > Features turns previews off.
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { PUBLIC_ORIGIN } from "./config";
 import { sql } from "./db";
+import { remoteMediaFile } from "./federation-sync";
 import { MEDIA_DIR } from "./media";
+import { isId } from "./ids";
 import { feature, settings } from "./settings";
 import { posterFile } from "./video";
 
@@ -23,21 +24,22 @@ type Author = { id: string; screen_name: string; name: string; bio: string; avat
 // an account anyone may see: not protected, suspended, limited or deactivated
 async function publicAuthor(where: Fragment): Promise<Author | undefined> {
 	const [u] = await sql`select ${sql.cast(sql`id`, "text")} as id, screen_name, name, bio, avatar_url from users
-		where ${where} and not protected and status in ('active', 'restricted') and deactivated_at is null`;
+		where ${where} and not protected and not instance_blocked and status in ('active', 'restricted') and deactivated_at is null`;
 	return u as Author | undefined;
 }
 
-type Post = { id: string; text: string; created_at: Date; author: Author; image?: { id: string; kind: string; mime: string; width: number; height: number } };
+type Post = { id: string; text: string; created_at: Date; author: Author; image?: { id: string; kind: string; mime: string; width: number; height: number; remote: boolean } };
 
 async function publicPost(id: string): Promise<Post | undefined> {
-	const [p] = await sql`select ${sql.cast(sql`id`, "text")} as id, ${sql.cast(sql`user_id`, "text")} as user_id, text, created_at, sensitive from posts where id = ${sql.cast(id, "bigint")} and not hidden`;
+	if (!isId(id)) return undefined;
+	const [p] = await sql`select ${sql.cast(sql`p.id`, "text")} as id, ${sql.cast(sql`p.user_id`, "text")} as user_id, p.text, p.created_at, p.sensitive and not u.never_sensitive as sensitive, u.never_sensitive from posts p join users u on u.id = p.user_id where p.id = ${sql.cast(id, "bigint")} and not p.hidden`;
 	if (!p) return undefined;
 	const author = await publicAuthor(sql`id = ${sql.cast(p.user_id, "bigint")}`);
 	if (!author) return undefined;
 	const [m] = p.sensitive
 		? []
-		: await sql`select ${sql.cast(sql`id`, "text")} as id, kind, mime, width, height from media
-			where post_id = ${sql.cast(id, "bigint")} and state = 'ready' and sensitive_warning is null order by position nulls last limit 1`;
+		: await sql`select ${sql.cast(sql`id`, "text")} as id, kind, mime, width, height, remote_instance is not null as remote from media
+			where post_id = ${sql.cast(id, "bigint")} and state = 'ready' and (coalesce(${sql.cardinality(sql`sensitive_warning`)}, 0) = 0 or ${p.never_sensitive}) order by position nulls last limit 1`;
 	return { id: p.id, text: p.text, created_at: p.created_at, author, image: m as Post["image"] };
 }
 
@@ -77,7 +79,7 @@ ${tags.map(([attr, key, value]) => `<meta ${attr}="${key}" content="${esc(value)
 const postTitle = (a: Author) => `${a.name} (@${a.screen_name})`;
 
 function postPreview(p: Post): Response {
-	const photo = p.image && (p.image.kind === "photo" || existsSync(posterFile(MEDIA_DIR, p.image.id)));
+	const photo = p.image && (p.image.kind === "photo" || p.image.remote || existsSync(posterFile(MEDIA_DIR, p.image.id)));
 	const avatar = avatarId(p.author);
 	return page({
 		path: `/${p.author.screen_name}/status/${p.id}`,
@@ -105,52 +107,62 @@ function profilePreview(a: Author): Response {
 	});
 }
 
+const handleIn = (pathname: string) => {
+	const raw = /^\/([^/]{1,320})\/?$/.exec(pathname)?.[1];
+	try {
+		const name = raw && decodeURIComponent(raw);
+		return name && /^[^\s\p{C}/\\?#@%,:]{1,50}(?:@[a-z0-9.:-]{1,260})?$/iu.test(name) ? name : undefined;
+	} catch {
+		return undefined;
+	}
+};
+
 // a signed-out page request: the preview page, or undefined to carry on as before
 export async function linkPreview(pathname: string): Promise<Response | undefined> {
 	if (!feature("link_previews")) return undefined;
-	const status = /^\/(\w{1,15})\/status\/(\d{1,19})(?:\/(?:photo|video)\/\d)?\/?$/.exec(pathname);
+	const status = /^\/([^/]{1,320})\/status\/(\d{1,19})(?:\/(?:photo|video)\/\d)?\/?$/i.exec(pathname);
 	if (status) {
 		const post = await publicPost(status[2]);
 		return post ? postPreview(post) : undefined;
 	}
-	const profile = /^\/(\w{1,15})\/?$/.exec(pathname);
+	const profile = handleIn(pathname);
 	if (profile) {
-		const author = await publicAuthor(sql`lower(screen_name) = lower(${profile[1]})`);
+		const author = await publicAuthor(sql`lower(screen_name) = lower(${profile})`);
 		return author ? profilePreview(author) : undefined;
 	}
 	return undefined;
 }
 
-async function fileResponse(file: string, type: string): Promise<Response> {
-	if (!existsSync(file)) return new Response("not found", { status: 404 });
-	return new Response(Bun.file(file), { headers: { "content-type": type, "cache-control": "public, max-age=3600", "x-content-type-options": "nosniff" } });
+async function fileResponse(body: Blob | undefined, type: string): Promise<Response> {
+	if (!body) return new Response("not found", { status: 404, headers: { "cache-control": "no-store" } });
+	return new Response(body, { headers: { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff" } });
 }
 
 // the pictures the preview pages name: a public post's first photo or video
 // frame, a public account's avatar. Other uploads stay for signed-in users.
 export async function embedImage(pathname: string): Promise<Response> {
-	const none = new Response("not found", { status: 404 });
+	const none = new Response("not found", { status: 404, headers: { "cache-control": "no-store" } });
 	if (!feature("link_previews")) return none;
 	const post = /^\/embed\/post\/(\d{1,19})$/.exec(pathname);
 	if (post) {
 		const p = await publicPost(post[1]);
 		if (!p?.image) return none;
-		return p.image.kind === "photo" ? fileResponse(join(MEDIA_DIR, p.image.id), p.image.mime) : fileResponse(posterFile(MEDIA_DIR, p.image.id), "image/jpeg");
+		return p.image.kind === "photo" ? fileResponse(await remoteMediaFile(p.image.id), p.image.mime) : fileResponse(await remoteMediaFile(p.image.id, true), "image/jpeg");
 	}
 	const avatar = /^\/embed\/avatar\/(\d{1,19})$/.exec(pathname);
-	if (avatar) {
+	if (avatar && isId(avatar[1])) {
 		const a = await publicAuthor(sql`id = ${sql.cast(avatar[1], "bigint")}`);
 		const id = a && avatarId(a);
-		if (!id) return none;
+		if (!id || !isId(id)) return none;
 		const [m] = await sql`select mime from media where id = ${sql.cast(id, "bigint")}`;
-		return m ? fileResponse(join(MEDIA_DIR, id), m.mime) : none;
+		return m ? fileResponse(await remoteMediaFile(id), m.mime) : none;
 	}
 	return none;
 }
 
 // oEmbed (oembed.com): apps such as Discord show the author line from it
 export async function oembed(url: URL): Promise<Response> {
-	const none = new Response("not found", { status: 404 });
+	const none = new Response("not found", { status: 404, headers: { "cache-control": "no-store" } });
 	if (!feature("link_previews")) return none;
 	let target: URL;
 	try {
@@ -159,10 +171,10 @@ export async function oembed(url: URL): Promise<Response> {
 		return none;
 	}
 	if (target.origin !== PUBLIC_ORIGIN) return none;
-	const status = /^\/\w{1,15}\/status\/(\d{1,19})/.exec(target.pathname);
+	const status = /^\/[^/]{1,320}\/status\/(\d{1,19})/i.exec(target.pathname);
 	const author = status
 		? (await publicPost(status[1]))?.author
-		: await publicAuthor(sql`lower(screen_name) = lower(${/^\/(\w{1,15})\/?$/.exec(target.pathname)?.[1] ?? ""})`);
+		: await publicAuthor(sql`lower(screen_name) = lower(${handleIn(target.pathname) ?? ""})`);
 	if (!author) return none;
 	return Response.json(
 		{
@@ -174,6 +186,6 @@ export async function oembed(url: URL): Promise<Response> {
 			provider_name: settings().instance_name,
 			provider_url: PUBLIC_ORIGIN,
 		},
-		{ headers: { "cache-control": "public, max-age=3600", "access-control-allow-origin": "*" } },
+		{ headers: { "cache-control": "no-store", "access-control-allow-origin": "*" } },
 	);
 }

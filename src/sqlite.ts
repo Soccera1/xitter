@@ -47,6 +47,21 @@ export function openSQLite(filename: string) {
 	};
 	db.exec("pragma foreign_keys = on; pragma journal_mode = WAL; pragma busy_timeout = 10000;");
 	db.function("now", () => Date.now());
+	db.function("iso_timestamp", (v: any) => v == null ? null : new Date(Number(v)).toISOString());
+	db.function("sha256_hex", (v: any) => v == null ? null : new Bun.CryptoHasher("sha256").update(v).digest("hex"));
+	db.function("json_has", (v: any, key: any) => {
+		if (v == null) return null;
+		const parsed = JSON.parse(String(v));
+		return Number(Array.isArray(parsed) ? parsed.includes(String(key)) : parsed !== null && typeof parsed === "object" && Object.hasOwn(parsed, String(key)));
+	});
+	db.function("json_type_pg", (v: any) => {
+		if (v == null) return null;
+		const parsed = JSON.parse(String(v));
+		return parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
+	});
+	db.function("translate", (v: any, from: any, to: any) => v == null ? null : [...String(v)].map(c => {
+		const i = String(from).indexOf(c); return i < 0 ? c : [...String(to)][i] ?? "";
+	}).join(""));
 	db.function("gen_random_uuid", () => crypto.randomUUID());
 	db.function("pg_bigint", (value: any) => {
 		if (value == null) return null;

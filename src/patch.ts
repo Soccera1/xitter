@@ -35,6 +35,12 @@ const RULES: [RegExp, string][] = [
 	// the site's own links, also when the address is the start of a longer string
 	// or template (profile hrefs, share links); subdomains are not matched
 	[/https:\/\/x\.com(?=["'`$/?#])/g, PUBLIC_ORIGIN],
+	// The profile editor leaves GIFs out of its avatar and banner pickers even
+	// though the upload API and the crop patch below support animated GIFs.
+	[/(location:\w+\.rz\.(?:Avatar|ProfileBanner),mediaItem:)/g, "acceptGifs:!0,$1"],
+	// ...and its "Edit media" cropper takes only isImage files, which a GIF
+	// isn't (it is isGif), so it got nothing and spun forever
+	[/(_getMedia=\(\)=>\{let\{media:(\w+)\}=this\.props;return \2&&\2\.mediaFile&&)\2\.mediaFile\.isImage\?/g, "$1($2.mediaFile.isImage||$2.mediaFile.isGif)?"],
 	// the upload host is assembled from a variable, which would force https and drop the port
 	[/`https:\/\/\$\{(\w+)\}\/i\/media\//g, "`${location.origin}/i/media/"],
 	[/"x\.com"/g, `"${PUBLIC_HOSTNAME}"`],
@@ -59,6 +65,17 @@ const RULES: [RegExp, string][] = [
 	// the router's profile addresses: staff can give a handle any characters up
 	// to 50 (invites.ts STAFF_HANDLE), which the address carries percent-encoded
 	[/screenName:"\[a-zA-Z0-9_\]\{1,26\}"/g, 'screenName:"[^/]{1,200}"'],
+	[
+		/(descriptionTextParts:\((\w+),(\w+),(\w+)\)=>\{let \w+=)(\w+)\(\(0,(\w+\.A)\)\(\2\),(\w+\.A\.MENTION)\)([\s\S]{0,600}?;let \w+=\3&&\3\.description&&\3\.description\.urls;if\(\w+&&\w+\.length\)\{let \3=\5\(\w+\.map\(\3=>\(\{\.\.\.\3,indices:\4\?\.isUTF16EntityIndices\?\3\.indices:\(0,(\w+\.A)\)\(\2,)/g,
+		"$1(Array.isArray($3?.description?.user_mentions)?$5($3.description.user_mentions.map($3=>({...$3,screenName:$3.screen_name,indices:$4?.isUTF16EntityIndices?$3.indices:(0,$9)($2,$3.indices[0],$3.indices[1])})),$7):$5((0,$6)($2),$7))$8",
+	],
+	[/(description:\(0,\w+\.A\)\((\w+)\.description,(\w+)=>\(\{urls:\3\.urls\?\.map\(\w+\))\}/g, "$1,user_mentions:$3.user_mentions}"],
+	[
+		/("\(#\{validMentionPrecedingChars\}\)\(#\{atSigns\}\)\(\[a-zA-Z0-9_\]\{1,20\})(\)\(\/\[a-zA-Z\]\[a-zA-Z0-9_-\]\{0,24\}\)\?")/g,
+		String.raw`$1(?:@[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*(?::\\d+)?)?$2`,
+	],
+	[/(regexp:|\w+=)\/\^\[@＠\]\(\\w\{1,20\}\)\//g, "$1/^[@＠](\\w{1,20}(?:@[a-zA-Z0-9.:-]*)?)/"],
+	[/(WordEnd:\/)(\[\^[^\]]*\\\][^\]]*\]\+)\$\//g, "$1(?:(?<![\\w!#$$%&*@＠])[@＠]\\w{1,20}@[a-zA-Z0-9.:-]*|$2)$$/"],
 	// Analytics hides its charts below 50 followers, which on a small instance
 	// is nearly everyone
 	[/(\w+)=(\w+)\.followerCount>=50,/g, "$1=$2.followerCount>=0,"],

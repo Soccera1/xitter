@@ -24,7 +24,11 @@ const ENDPOINTS: Endpoint[] = [
 	["POST", "/posts/{id}/repost", "write", "Repost. <code>DELETE</code> to undo."],
 	["POST", "/posts/{id}/bookmark", "write", "Bookmark. <code>DELETE</code> to undo."],
 	["POST", "/users/{screen_name}/follow", "write", "Follow (asks, for a protected account). <code>DELETE</code> to unfollow."],
-	["POST", "/media", "write", "Upload an image, GIF or video: the file is the whole body, with its <code>Content-Type</code>. Returns a <code>media_id</code> for <code>/posts</code>; a video may still be <code>processing</code>."],
+	["POST", "/media", "write", "Upload a small image, GIF or video as the whole body, with its <code>Content-Type</code>. Returns a <code>media_id</code> for <code>/posts</code>. For larger files or retries, use <a href=\"#chunked-uploads\">chunked uploads</a>."],
+	["POST", "/media/uploads", "write", "Start an upload. JSON: <code>media_type</code> and <code>total_bytes</code>. Returns <code>media_id</code>, <code>max_segment_bytes</code> and <code>expires_after_secs</code>."],
+	["POST", "/media/{id}/segments/{segment_index}", "write", "Send one segment as the raw body. Indices start at 0; retrying an index replaces that segment."],
+	["POST", "/media/{id}/finalize", "write", "Finish an upload after sending every segment. Returns its processing state."],
+	["GET", "/media/{id}", "read", "Check your upload's processing state. Pending uploads also report <code>total_bytes</code>, <code>received_bytes</code> and <code>segments</code>."],
 ];
 
 const DOCS_CSS = `table{width:100%;border-collapse:collapse}
@@ -44,6 +48,14 @@ export function apiDocsPage(req: Request): Promise<Response> {
 <h2>Signing in</h2>
 <p>Make a token at <a href="/account/api">/account/api</a>. A <span class="r">read</span> token can only look; a <span class="w">write</span> token can also post, like and follow. Send it with every request:</p>
 <pre>Authorization: Bearer xit_...</pre>
+<p>Changing or resetting your password revokes all API tokens. Make new tokens for your scripts and bots afterward.</p>
+<p>For an app used by other people, register a public client at <a href="/account/apps/developer">Developer apps</a>. Users review and revoke grants at <a href="/account/apps">Connected apps</a>.</p>
+<h3>OAuth 2 with PKCE</h3>
+<ol><li>Generate a random 43–128 character <code>code_verifier</code> and its SHA-256 base64url <code>code_challenge</code>. Generate a random <code>state</code>.</li>
+<li>Open <code>${esc(PUBLIC_ORIGIN)}/oauth/authorize</code> with <code>response_type=code</code>, your <code>client_id</code>, exact registered <code>redirect_uri</code>, <code>scope=read</code> or <code>write</code>, <code>state</code>, <code>code_challenge</code>, and <code>code_challenge_method=S256</code>.</li>
+<li>After consent, validate <code>state</code> and send the returned <code>code</code> with <code>grant_type=authorization_code</code>, <code>client_id</code>, <code>redirect_uri</code>, and <code>code_verifier</code> as a form POST to <code>${esc(PUBLIC_ORIGIN)}/oauth/token</code>.</li>
+<li>Use <code>access_token</code> as the Bearer token below. Codes work once for five minutes; access tokens expire after 30 days. Reauthorize to get a new one.</li></ol>
+<p>PKCE S256 is required. Clients have no shared secret. HTTPS redirects and HTTP loopback redirects are accepted; the redirect must match the registered URL exactly.</p>
 <p>Requests go to <code>${esc(base)}</code>. Bodies are JSON (or a form); answers are JSON with the result in <code>data</code>, or <code>{"error": "..."}</code> with a 4xx or 5xx status.</p>
 
 <h2>Endpoints</h2>
@@ -51,6 +63,17 @@ export function apiDocsPage(req: Request): Promise<Response> {
 
 <h2>Paging</h2>
 <p>Lists take <code>limit</code> (20 by default, 100 at most). Those that page give <code>next_cursor</code>: pass it back as <code>cursor</code> for the next page; it is <code>null</code> at the end.</p>
+
+<h2 id="chunked-uploads">Chunked uploads</h2>
+<p>Use chunks for files larger than the server's 16 MiB request limit, or to retry an interrupted upload. Each segment can be up to 5 MiB; the instance's image and video file limits still apply.</p>
+<ol>
+<li>Start with <code>POST /media/uploads</code>. Give the file's MIME type and exact byte length, then save the returned <code>media_id</code>.</li>
+<li>Send consecutive segments to <code>POST /media/{id}/segments/0</code>, <code>/1</code>, and so on. Use a raw binary body. You can send segments out of order and retry the same index without counting its bytes twice.</li>
+<li>To resume, read <code>GET /media/{id}</code>. While <code>processing</code> is <code>uploading</code>, <code>segments</code> lists the received <code>segment_index</code> and <code>bytes</code> for each segment.</li>
+<li>Call <code>POST /media/{id}/finalize</code>; you can retry it for the same upload. If processing is still pending, poll <code>GET /media/{id}</code> after <code>check_after_secs</code>. Publish with the <code>media_id</code> once <code>processing</code> is <code>succeeded</code>. A <code>failed</code> result includes an <code>error</code>: check it, fix the file and start a new upload.</li>
+</ol>
+<p>Pending uploads expire after an hour. Their state is kept by the server process: if it restarts, start a new upload. You can have up to eight pending uploads. Only tokens for the account that started an upload can inspect or change it.</p>
+<p>Starting an upload counts toward the upload limit. Sending segments and finalizing use the normal write limit; progress checks use the read limit.</p>
 
 <h2>Limits</h2>
 <p>The same as in the app: ${window("read")} requests in all, ${window("post")} posts, ${window("engage")} likes, reposts, bookmarks and follows together, and ${window("upload")} uploads. Every answer carries <code>x-rate-limit-limit</code>, <code>-remaining</code> and <code>-reset</code> (a Unix time); over a limit you get <code>429</code> with <code>retry-after</code>.</p>

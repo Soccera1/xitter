@@ -11,16 +11,18 @@
 		"client:fetch": "bun scripts/fetch-client.ts",
 		"check:queries": "bun scripts/check-queries.ts",
 		"typecheck": "tsc --noEmit",
-		"test:unit": "bun test ./scripts/test-thrift.ts ./scripts/test-request-ip.ts ./scripts/test-links.ts ./scripts/test-push-crypto.ts ./scripts/test-hate.ts ./scripts/test-branding.ts ./scripts/test-chat-token.ts",
+		"test:unit": "bun scripts/test-unit.ts",
 		"check": "bun run typecheck && bun run test:unit && bun run test:databases",
 		"test:backends": "bun scripts/test-backends.ts",
 		"test:databases": "bun run check:queries && bun test ./scripts/schema-sync.test.ts ./scripts/sqlite.test.ts ./scripts/query.test.ts && bun run test:backends"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",
-		"typescript": "5.9.3"
+		"typescript": "5.9.3",
+		"@types/nodemailer": "6.4.17"
 	},
 	"dependencies": {
-		"emusks": "^2.3.19"
+		"emusks": "^2.3.19",
+		"nodemailer": "6.9.16"
 	}
 }

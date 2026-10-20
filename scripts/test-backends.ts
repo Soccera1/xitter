@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const root = resolve(import.meta.dir, "..");
-const directory = mkdtempSync(join(tmpdir(), "xitter-backends-"));
+const directory = mkdtempSync(join(tmpdir(), "xitter-backend-tests-"));
 mkdirSync(join(directory, "client/abs/responsive-web/client-web"), { recursive: true });
 // Exercise the generated HTML without downloading or executing a client bundle.
 writeFileSync(
@@ -25,6 +25,7 @@ const names = ["backend_a", "backend_b", "backend_c", "backend_d"];
 const image = join(directory, "pixel.png");
 writeFileSync(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"));
 const suites: [string, string[]][] = [
+	...["oauth", "data-export", "note-appeals", "poll-visibility", "scheduled-validation"].map(name => [name, []] as [string, string[]]),
 	["polls", [names[0], names[1], password]],
 	["notifications", [names[0], names[1], password]],
 	["analytics", [names[0], names[1], password]],
@@ -69,7 +70,7 @@ try {
 		if (backend === "postgres") {
 			const url = new URL(process.env.TEST_POSTGRES_URL!);
 			admin = new SQL(url.href);
-			databaseName = `xitter_features_${process.pid}`;
+			databaseName = `xitter_features_test_${process.pid}`;
 			await admin.unsafe(`create database "${databaseName}"`);
 			url.pathname = `/${databaseName}`;
 			databaseURL = url.href;
